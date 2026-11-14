@@ -20,11 +20,12 @@ const REMOTE = !!(GIST_ID && GH_TOKEN);
 if (REMOTE && DATA_SECRET.length < 8) { console.error('Для хранения в Gist задай DATA_SECRET (любой пароль от 8 символов)'); process.exit(1); }
 const ONLINE_MS = 60 * 1000;                              // «в сети», если был отклик не раньше минуты назад
 const TOKEN_TTL = 60 * 86400 * 1000;
+const CLAN_MAX = 30, MAX_CLANS = 1000;
 const MAX_FRIENDS = 100, MAX_PENDING = 50, MAX_BODY = 200 * 1024, MAX_AV = 70 * 1024;
 
 // ---------- хранилище (один JSON-файл) ----------
-let db = { users: {}, tokens: {}, chats: {} };
-try { db = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); db.users = db.users || {}; db.tokens = db.tokens || {}; db.chats = db.chats || {}; } catch (e) { /* первый запуск */ }
+let db = { users: {}, tokens: {}, chats: {}, clans: {} };
+try { db = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); db.users = db.users || {}; db.tokens = db.tokens || {}; db.chats = db.chats || {}; db.clans = db.clans || {}; } catch (e) { /* первый запуск */ }
 let saveTimer = null;
 function writeNow() {
   const tmp = DATA_FILE + '.tmp';
@@ -106,6 +107,39 @@ function unreadFrom(me, f) {
   for (const m of c.msgs) if (m.from === f && m.id > r) n++;
   return n;
 }
+
+// ---------- кланы ----------
+const clanOf = l => { const u = db.users[l]; return u && u.clan && db.clans[u.clan] ? db.clans[u.clan] : null; };
+const clanName = s => String(s || '').replace(/[<>&"'`\u0000-\u001f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 20);
+const clanTag = s => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4);
+function clanState(login) {
+  const c = clanOf(login); if (!c) return null;
+  const now = Date.now(), u = db.users[login], r = u.cread || 0;
+  let unread = 0; for (const m of c.chat.msgs) if (m.from !== login && m.id > r) unread++;
+  return {
+    id: c.id, name: c.name, tag: c.tag, desc: c.desc, leader: c.leader, max: CLAN_MAX, unread,
+    members: c.members.filter(l => db.users[l]).map(l => { const s = db.users[l].seen || {}, ago = s.t ? now - s.t : -1; return { login: l, nick: db.users[l].nick, on: !!(s.on && ago >= 0 && ago < ONLINE_MS), ago, leader: l === c.leader }; }),
+    reqs: c.leader === login ? c.reqs.filter(l => db.users[l]).map(l => ({ login: l, nick: db.users[l].nick })) : []
+  };
+}
+function dropClan(c) {
+  for (const l of c.members) { const u = db.users[l]; if (u) { delete u.clan; delete u.cread; } }
+  for (const l of c.reqs) { const u = db.users[l]; if (u) delete u.creq; }
+  delete db.clans[c.id];
+}
+function removeFromClan(login) { // выход/исключение/удаление аккаунта
+  const u = db.users[login]; if (!u) return;
+  const c = u.clan && db.clans[u.clan];
+  delete u.clan; delete u.cread;
+  if (u.creq && db.clans[u.creq]) rm(db.clans[u.creq].reqs, login);
+  delete u.creq;
+  if (!c) return;
+  rm(c.members, login);
+  if (!c.members.length) { delete db.clans[c.id]; return; }
+  if (c.leader === login) c.leader = c.members[0]; // лидерство переходит к самому старому участнику
+}
+function needClan(a) { const c = clanOf(a.login); if (!c) throw new HttpErr(403, 'Ты не в клане'); return c; }
+function needLeader(a) { const c = needClan(a); if (c.leader !== a.login) throw new HttpErr(403, 'Это может только лидер клана'); return c; }
 function newToken(login) {
   const tok = crypto.randomBytes(32).toString('hex');
   db.tokens[sha(tok)] = { login, t: Date.now() };
@@ -122,7 +156,7 @@ function authOf(req, body) {
 }
 
 // ---------- состояние для клиента ----------
-const pub = l => ({ login: l, nick: db.users[l].nick, av: db.users[l].avv || 0 });
+const pub = l => ({ login: l, nick: db.users[l].nick, av: db.users[l].avv || 0, tag: (clanOf(l) || {}).tag || '' });
 function state(login) {
   const u = db.users[login], now = Date.now();
   return {
@@ -132,7 +166,9 @@ function state(login) {
       return Object.assign(pub(l), { on: !!(s.on && ago >= 0 && ago < ONLINE_MS), ago, unread: unreadFrom(login, l) });
     }),
     incoming: u.inc.filter(l => db.users[l]).map(pub),
-    outgoing: u.out.filter(l => db.users[l]).map(pub)
+    outgoing: u.out.filter(l => db.users[l]).map(pub),
+    clan: clanState(login),
+    creq: u.creq && db.clans[u.creq] ? { id: u.creq, name: db.clans[u.creq].name, tag: db.clans[u.creq].tag } : null
   };
 }
 function link(a, b) { // сделать друзьями и убрать заявки
@@ -284,11 +320,97 @@ const routes = {
     }
     return { msgs };
   },
+  'POST /api/clan/create'(req, body) {
+    const a = authOf(req, body);
+    if (a.user.clan && db.clans[a.user.clan]) throw new HttpErr(409, 'Ты уже в клане');
+    if (limited(a.login, 'clan', 8, 3600000)) throw new HttpErr(429, 'Слишком много попыток, подожди немного');
+    const name = clanName(body.name), tag = clanTag(body.tag), desc = clanName(String(body.desc || '').slice(0, 100)).slice(0, 100);
+    if (name.length < 3) throw new HttpErr(400, 'Название клана: минимум 3 символа');
+    if (tag.length < 2) throw new HttpErr(400, 'Тег клана: 2–4 символа, латиница и цифры');
+    if (Object.keys(db.clans).length >= MAX_CLANS) throw new HttpErr(400, 'Достигнут лимит кланов на сервере');
+    for (const id in db.clans) { const c = db.clans[id]; if (c.name.toLowerCase() === name.toLowerCase()) throw new HttpErr(409, 'Клан с таким названием уже есть'); if (c.tag === tag) throw new HttpErr(409, 'Тег «' + tag + '» уже занят'); }
+    if (a.user.creq && db.clans[a.user.creq]) rm(db.clans[a.user.creq].reqs, a.login);
+    delete a.user.creq;
+    const id = crypto.randomBytes(4).toString('hex');
+    db.clans[id] = { id, name, tag, desc, leader: a.login, members: [a.login], reqs: [], created: Date.now(), chat: { next: 1, msgs: [] } };
+    a.user.clan = id; a.user.cread = 0; save();
+    return Object.assign(state(a.login), { note: 'Клан «' + name + '» [' + tag + '] создан' });
+  },
+  'POST /api/clan/search'(req, body) {
+    authOf(req, body);
+    const q = String(body.q || '').trim().toLowerCase().slice(0, 30);
+    const list = Object.values(db.clans).filter(c => !q || c.name.toLowerCase().includes(q) || c.tag.toLowerCase().includes(q))
+      .sort((x, y) => y.members.length - x.members.length).slice(0, 20)
+      .map(c => ({ id: c.id, name: c.name, tag: c.tag, desc: c.desc, members: c.members.length, max: CLAN_MAX }));
+    return { list };
+  },
+  'POST /api/clan/join'(req, body) {
+    const a = authOf(req, body), c = db.clans[String(body.id || '')];
+    if (a.user.clan && db.clans[a.user.clan]) throw new HttpErr(409, 'Ты уже в клане');
+    if (!c) throw new HttpErr(404, 'Клан не найден');
+    if (a.user.creq && db.clans[a.user.creq]) throw new HttpErr(409, 'Сначала отмени прошлую заявку');
+    if (c.members.length >= CLAN_MAX) throw new HttpErr(400, 'В клане нет мест');
+    if (c.reqs.length >= 30) throw new HttpErr(400, 'У клана слишком много заявок');
+    c.reqs.push(a.login); a.user.creq = c.id; save();
+    return Object.assign(state(a.login), { note: 'Заявка в клан [' + c.tag + '] отправлена' });
+  },
+  'POST /api/clan/cancel'(req, body) {
+    const a = authOf(req, body);
+    if (a.user.creq && db.clans[a.user.creq]) rm(db.clans[a.user.creq].reqs, a.login);
+    delete a.user.creq; save();
+    return Object.assign(state(a.login), { note: 'Заявка отменена' });
+  },
+  'POST /api/clan/accept'(req, body) {
+    const a = authOf(req, body), c = needLeader(a), t = String(body.login || '').trim().toLowerCase(), T = db.users[t];
+    if (!T || !c.reqs.includes(t)) throw new HttpErr(404, 'Заявки нет');
+    if (c.members.length >= CLAN_MAX) throw new HttpErr(400, 'В клане нет мест');
+    rm(c.reqs, t); delete T.creq;
+    if (T.clan && db.clans[T.clan]) throw new HttpErr(409, 'Игрок уже вступил в другой клан');
+    c.members.push(t); T.clan = c.id; T.cread = c.chat.msgs.length ? c.chat.msgs[c.chat.msgs.length - 1].id : 0; save();
+    return Object.assign(state(a.login), { note: T.nick + ' принят(а) в клан' });
+  },
+  'POST /api/clan/decline'(req, body) {
+    const a = authOf(req, body), c = needLeader(a), t = String(body.login || '').trim().toLowerCase();
+    rm(c.reqs, t); if (db.users[t]) delete db.users[t].creq; save();
+    return Object.assign(state(a.login), { note: 'Заявка отклонена' });
+  },
+  'POST /api/clan/kick'(req, body) {
+    const a = authOf(req, body), c = needLeader(a), t = String(body.login || '').trim().toLowerCase();
+    if (t === a.login || !c.members.includes(t)) throw new HttpErr(400, 'Нельзя исключить этого игрока');
+    removeFromClan(t); save();
+    return Object.assign(state(a.login), { note: 'Игрок исключён из клана' });
+  },
+  'POST /api/clan/leave'(req, body) {
+    const a = authOf(req, body); needClan(a); removeFromClan(a.login); save();
+    return Object.assign(state(a.login), { note: 'Ты покинул клан' });
+  },
+  'POST /api/clan/disband'(req, body) {
+    const a = authOf(req, body), c = needLeader(a); dropClan(c); save();
+    return Object.assign(state(a.login), { note: 'Клан распущен' });
+  },
+  'POST /api/clan/chat/send'(req, body) {
+    const a = authOf(req, body), c = needClan(a);
+    const text = String(body.text || '').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').trim().slice(0, 300);
+    if (!text) throw new HttpErr(400, 'Пустое сообщение');
+    const now = Date.now(), r = (msgRate.get(a.login) || []).filter(t => now - t < 30000);
+    if (r.length >= 20) throw new HttpErr(429, 'Слишком часто, подожди немного');
+    r.push(now); msgRate.set(a.login, r);
+    c.chat.msgs.push({ id: c.chat.next++, from: a.login, nick: a.user.nick, t: now, text });
+    if (c.chat.msgs.length > 100) c.chat.msgs.splice(0, c.chat.msgs.length - 100);
+    save(); return { ok: true };
+  },
+  'POST /api/clan/chat/get'(req, body) {
+    const a = authOf(req, body), c = needClan(a), since = +body.since || 0;
+    const msgs = c.chat.msgs.filter(m => m.id > since).slice(-100).map(m => Object.assign({}, m, { nick: db.users[m.from] ? db.users[m.from].nick : m.nick }));
+    if (body.read && c.chat.msgs.length) { const last = c.chat.msgs[c.chat.msgs.length - 1].id; if ((a.user.cread || 0) !== last) { a.user.cread = last; save(); } }
+    return { msgs };
+  },
   'POST /api/delete'(req, body, ip) {
     if (limited(ip, 'auth', 20, 600000)) throw new HttpErr(429, 'Слишком много попыток, подожди несколько минут');
     const a = authOf(req, body);
     if (!checkPw(String(body.pass || ''), a.user)) throw new HttpErr(401, 'Пароль неверный');
     for (const l of [...a.user.friends, ...a.user.inc, ...a.user.out]) unlink(a.login, l);
+    removeFromClan(a.login);
     for (const h in db.tokens) if (db.tokens[h].login === a.login) delete db.tokens[h];
     delete db.users[a.login]; save(); return { ok: true };
   }
@@ -343,7 +465,7 @@ const server = http.createServer(async (req, res) => {
   if (REMOTE) {
     try {
       const r = await loadRemote();
-      if (r) { db = r; db.users = db.users || {}; db.tokens = db.tokens || {}; db.chats = db.chats || {}; console.log('Данные загружены из Gist, игроков: ' + Object.keys(db.users).length); }
+      if (r) { db = r; db.users = db.users || {}; db.tokens = db.tokens || {}; db.chats = db.chats || {}; db.clans = db.clans || {}; console.log('Данные загружены из Gist, игроков: ' + Object.keys(db.users).length); }
       else { console.log('Gist пока пуст — начинаем с чистого листа'); dirtyRemote = true; }
     } catch (e) {
       console.error('Не удалось загрузить данные из Gist (' + e.message + '). Останавливаюсь, чтобы не затереть сохранения. Проверь GIST_ID, GITHUB_TOKEN и DATA_SECRET.');

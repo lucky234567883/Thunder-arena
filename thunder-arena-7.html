@@ -1567,7 +1567,7 @@ lb.style.borderRadius='50%';lb.style.borderColor=s==2?'#ff2a2a':'#ffffff';lb.sty
 
 
 // ===== ДОБАВЛЕНО: настройки (язык, звук, версия) =====
-const GVER='1.1.0';
+const GVER='1.2.0';
 const LI=['ru','en','zh','ja','uk','de','it'],LN={ru:'Русский',en:'English',zh:'中文',ja:'日本語',uk:'Українська',de:'Deutsch',it:'Italiano'};
 let LSET={};try{LSET=JSON.parse(localStorage.getItem('ta_set'))||{}}catch(e){}
 const lsave=()=>{try{localStorage.setItem('ta_set',JSON.stringify(LSET))}catch(e){}};
@@ -2494,7 +2494,7 @@ const r=await fetch(b+path,{method:'POST',headers:{'Content-Type':'application/j
 let j={};try{j=await r.json()}catch(e){}if(!r.ok){const er=new Error(j.error||('Ошибка '+r.status));er.code=r.status;throw er}return j}
 // оранжевый кружок на кнопке 👤, если есть входящие заявки
 {const st=document.createElement('style');st.textContent='#accb{position:relative}#accb.dot::after{content:"";position:absolute;top:-3px;right:-3px;width:12px;height:12px;border-radius:50%;background:#ff9800;border:2px solid #101820;box-shadow:0 0 6px #ff9800}';document.head.appendChild(st)}
-function svDot(){const b=$('accb');if(b)b.classList.toggle('dot',!!(svOK()&&SV.d&&((SV.d.incoming&&SV.d.incoming.length)||(SV.d.friends&&SV.d.friends.some(f=>f.unread)))))}
+function svDot(){const b=$('accb');if(b)b.classList.toggle('dot',!!(svOK()&&SV.d&&((SV.d.incoming&&SV.d.incoming.length)||(SV.d.friends&&SV.d.friends.some(f=>f.unread))||(SV.d.clan&&((SV.d.clan.unread||0)+((SV.d.clan.reqs||[]).length))>0)||(SV.d.clan&&(SV.d.clan.unread||SV.d.clan.reqs.length)))))}
 async function srvSync(on){if(!ACC||!SV.tok)return;const me=ACC;
 try{const d=await srvApi('/api/sync',{on:on===undefined?(document.hidden?0:1):on});if(ACC!==me)return;SV.d=d;SV.st='ok';SV.err='';svDot();frRender();srvAvFetch()}
 catch(e){if(ACC!==me)return;if(e.code==401){SV.tok='';SV.st='noauth';SV.d=null;SV.err='Сессия истекла — подключись снова';try{localStorage.removeItem('ta_tok:'+ACC)}catch(_){}svDot();frSrvUI();frRender()}else SV.err='Нет связи с сервером'}}
@@ -2515,7 +2515,7 @@ try{const r=await srvApi('/api/avatar/get',{login:u.login});SV.av[u.login]={v:r.
 if(ch)frRender()}
 // список друзей в режиме сервера
 function frRow(u,btns,st,on){const av=(SV.av[u.login]||{}).data||'',nk=String(u.nick||u.login).replace(/[<>&"'`]/g,'');
-return'<div style="display:flex;align-items:center;gap:10px;margin:6px 0;padding:6px;border-radius:10px;background:#1b2430"><div style="width:40px;height:40px;min-width:40px;border-radius:50%;border:2px solid '+(on?'#4cd964':'#556')+';display:flex;align-items:center;justify-content:center;background:#0f1620'+(av&&/^data:image\//.test(av)?' url('+av+') center/cover':'')+'">'+(av?'':'👤')+'</div><div style="flex:1;text-align:left"><b>'+nk+'</b> <span style="opacity:.5;font-size:12px">@'+u.login+'</span><br><span style="font-size:12px;color:'+(on?'#4cd964':'#9aa7b5')+'">'+(on?'● ':'')+st+'</span></div>'+btns+'</div>'}
+return'<div style="display:flex;align-items:center;gap:10px;margin:6px 0;padding:6px;border-radius:10px;background:#1b2430"><div style="width:40px;height:40px;min-width:40px;border-radius:50%;border:2px solid '+(on?'#4cd964':'#556')+';display:flex;align-items:center;justify-content:center;background:#0f1620'+(av&&/^data:image\//.test(av)?' url('+av+') center/cover':'')+'">'+(av?'':'👤')+'</div><div style="flex:1;text-align:left"><b>'+(u.tag?'<span style="color:#ffd24a">['+chEsc(u.tag)+']</span> ':'')+nk+'</b> <span style="opacity:.5;font-size:12px">@'+u.login+'</span><br><span style="font-size:12px;color:'+(on?'#4cd964':'#9aa7b5')+'">'+(on?'● ':'')+st+'</span></div>'+btns+'</div>'}
 function frListS(){const d=SV.d;if(!d)return'<div class="hint">Загрузка…</div>';let h='';
 if(d.incoming.length)h+='<div style="font-weight:bold;color:#ff9800;margin:6px 0">🟠 Заявки в друзья ('+d.incoming.length+')</div>'+d.incoming.map(u=>frRow(u,'<button onclick="srvAct(\'accept\',\''+u.login+'\')">✔ Принять</button> <button onclick="srvAct(\'decline\',\''+u.login+'\')">✖</button>','хочет добавить тебя в друзья',0)).join('');
 h+=d.friends.length?d.friends.map(u=>{const s=frStatO({t:u.ago<0?0:Date.now()-u.ago,on:u.on});return frRow(u,'<button onclick="chOpen(\''+u.login+'\')">💬'+(u.unread?' <b style="color:#ff9800">'+u.unread+'</b>':'')+'</button> <button onclick="srvAct(\'remove\',\''+u.login+'\')">✖</button>',s.t,s.on)}).join(''):'<div class="hint">Нет друзей :( Добавь их или пригласи!</div>';
@@ -2552,15 +2552,15 @@ const chEsc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g
 function chOpen(l){if(!svOK())return;CH.with=l;CH.last=0;CH.msgs=[];let o=$('chat');
 if(!o){o=document.createElement('div');o.id='chat';o.style.cssText='position:fixed;left:0;top:0;right:0;bottom:0;z-index:99999;background:#0f1620;color:#e8eef5;display:flex;flex-direction:column;font:16px sans-serif';document.body.appendChild(o)}
 o.style.display='flex';const f=((SV.d&&SV.d.friends)||[]).find(x=>x.login==l)||{login:l,nick:l};
-o.innerHTML='<div style="display:flex;align-items:center;gap:10px;padding:10px;background:#1b2430"><button onclick="chClose()" style="padding:8px 14px;font-size:18px">←</button><b style="flex:1">'+chEsc(f.nick||l)+' <span style="opacity:.5;font-size:12px">@'+l+'</span></b></div><div id="chm" style="flex:1;overflow-y:auto;padding:10px"></div><div style="display:flex;gap:6px;padding:8px;background:#1b2430"><input id="chi" maxlength="300" placeholder="Сообщение…" autocomplete="off" style="flex:1;min-width:0;padding:10px;border-radius:8px;border:1px solid #556;background:#0f1620;color:#e8eef5;font-size:16px"><button onclick="chSend()" style="padding:10px 16px;font-size:18px">➤</button></div>';
-$('chi').onkeydown=e=>{if(e.key=='Enter')chSend()};chRender(1);chPoll(true);clearInterval(CH.t);CH.t=setInterval(()=>chPoll(false),3000)}
+o.innerHTML='<div style="display:flex;align-items:center;gap:10px;padding:10px;background:#1b2430"><button onclick="chClose()" style="padding:8px 14px;font-size:18px">←</button><b style="flex:1">'+chEsc(f.nick||l)+' <span style="opacity:.5;font-size:12px">@'+l+'</span></b></div><div id="chm" style="flex:1;overflow-y:auto;padding:10px"></div><div style="display:flex;gap:6px;padding:8px;background:#1b2430"><input id="fchi" maxlength="300" placeholder="Сообщение…" autocomplete="off" style="flex:1;min-width:0;padding:10px;border-radius:8px;border:1px solid #556;background:#0f1620;color:#e8eef5;font-size:16px"><button onclick="chSend()" style="padding:10px 16px;font-size:18px">➤</button></div>';
+$('fchi').onkeydown=e=>{if(e.key=='Enter')chSend()};chRender(1);chPoll(true);clearInterval(CH.t);CH.t=setInterval(()=>chPoll(false),3000)}
 function chRender(sc){const b=$('chm');if(!b)return;const near=b.scrollHeight-b.scrollTop-b.clientHeight<80;
 b.innerHTML=CH.msgs.length?CH.msgs.map(m=>{const me=m.from==ACC,d=new Date(m.t),tm=('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);
 return'<div style="display:flex;justify-content:'+(me?'flex-end':'flex-start')+';margin:4px 0"><div style="max-width:78%;padding:8px 10px;border-radius:12px;background:'+(me?'#2a5a9a':'#232f3e')+';word-wrap:break-word;white-space:pre-wrap">'+chEsc(m.text)+'<div style="font-size:10px;opacity:.6;text-align:right;margin-top:2px">'+tm+'</div></div></div>'}).join(''):'<div style="opacity:.6;text-align:center;margin-top:30px">Сообщений пока нет. Напиши первым!</div>';
 if(sc||near)b.scrollTop=b.scrollHeight}
 async function chPoll(first){const w=CH.with;if(!w||!svOK())return;
 try{const r=await srvApi('/api/chat/get',{with:w,since:CH.last,read:1});if(CH.with!==w)return;if(r.msgs.length){CH.msgs=CH.msgs.concat(r.msgs);CH.last=r.msgs[r.msgs.length-1].id}if(first||r.msgs.length)chRender(1);if(r.msgs.length)srvSync()}catch(e){}}
-async function chSend(){const i=$('chi'),t=(i&&i.value||'').trim();if(!t||!CH.with||!svOK())return;i.value='';
+async function chSend(){const i=$('fchi'),t=(i&&i.value||'').trim();if(!t||!CH.with||!svOK())return;i.value='';
 try{await srvApi('/api/chat/send',{to:CH.with,text:t});chPoll(true)}catch(e){i.value=t;i.placeholder=e.code?e.message:'Нет связи с сервером'}}
 function chClose(){clearInterval(CH.t);CH.with=null;const o=$('chat');if(o)o.style.display='none';if(SV.tok)srvSync()}
 {const _o5=outAcc;outAcc=function(){chClose();_o5.apply(this,arguments)}}
@@ -2590,5 +2590,61 @@ try{localStorage.removeItem('ta_tok:'+l)}catch(e){}
 m('✅ Пароль изменён'+(loc&&srv?' (на устройстве и на сервере)':loc?' на этом устройстве'+(srvBase()&&err?' (на сервере не вышло: '+err+')':''):' на сервере. На этом устройстве такого аккаунта нет — зарегистрируйся с этим же логином и новым паролем')+'. Теперь войди с новым паролем. Код больше не действует, создай новый в окне 👤.')}
 {const _sa6=showAuth;showAuth=function(reg){_sa6.apply(this,arguments);if(reg)return;const au=$('au');if(au&&!$('rcl'))au.insertAdjacentHTML('beforeend','<div class="hint" id="rcl"><a onclick="rcForm()">Забыли пароль?</a></div>')}}
 
+
+// ===== ДОБАВЛЕНО: кланы (нужен сервер) =====
+const CLAN_COST=0; // цена создания клана в G. Сейчас бесплатно. Когда включим платное создание — поставить 200
+const CLN={view:'main',q:'',res:null,msgs:[],last:0,t:0,t2:0,note:'',cf:null};
+const clBtn='padding:8px 12px;margin:3px 3px 3px 0';
+const clIn='padding:10px;border-radius:8px;border:1px solid #556;background:#0f1620;color:#e8eef5;font-size:16px;width:100%;box-sizing:border-box;margin:4px 0';
+function clBox(){let o=$('clanp');if(!o){o=document.createElement('div');o.id='clanp';o.style.cssText='position:fixed;left:0;top:0;right:0;bottom:0;z-index:99998;background:#0f1620;color:#e8eef5;display:none;flex-direction:column;font:16px sans-serif';document.body.appendChild(o)}return o}
+function clHead(t,back){return'<div style="display:flex;align-items:center;gap:10px;padding:10px;background:#1b2430"><button onclick="'+(back||'clClose()')+'" style="padding:8px 14px;font-size:18px">←</button><b style="flex:1">'+t+'</b></div>'}
+function clNote(t){CLN.note=t;const e=$('fcn_note');if(e)e.textContent=t}
+function clRow(){const e=$('clrow');if(!e)return;
+if(!svOK()){e.innerHTML='<div class="hint">🛡 Кланы доступны при подключении к серверу.</div>';return}
+const c=SV.d&&SV.d.clan,n=c?(c.unread||0)+(c.reqs||[]).length:0;
+e.innerHTML='<div style="font-weight:bold;margin:6px 0">🛡 Клан</div>'+(c?'<div style="margin:4px 0"><b style="color:#ffd24a">['+chEsc(c.tag)+']</b> '+chEsc(c.name)+' <span class="hint">· '+c.members.length+'/'+c.max+'</span></div>':'<div class="hint">Ты не в клане. Найди клан или создай свой.</div>')+'<button onclick="clOpen()">🛡 '+(c?'Открыть клан':'Кланы')+(n?' <b style="color:#b00000">'+n+'</b>':'')+'</button>'}
+function clOpen(){if(!svOK())return;CLN.view=SV.d&&SV.d.clan?'main':'search';CLN.note='';CLN.cf=null;clBox().style.display='flex';clRender();clearInterval(CLN.t);CLN.t=setInterval(clTick,4000)}
+async function clTick(){if(!svOK()){return}await srvSync();if(CLN.view=='main'&&$('clanp')&&$('clanp').style.display!='none')clRender()}
+function clClose(){clearInterval(CLN.t);clearInterval(CLN.t2);CLN.view='main';const o=$('clanp');if(o)o.style.display='none';frRender();svDot()}
+function clRender(){const o=clBox(),d=SV.d||{},c=d.clan;
+if(CLN.view=='chat'&&c)return clChatRender();
+if(!c&&(CLN.view=='main'||CLN.view=='chat'))CLN.view='search';
+if(c){CLN.view='main';const mem=c.members.map(m=>{const s=frStatO({t:m.ago<0?0:Date.now()-m.ago,on:m.on});return'<div style="display:flex;align-items:center;gap:8px;margin:5px 0;padding:6px 8px;border-radius:10px;background:#1b2430"><div style="flex:1;min-width:0">'+(m.leader?'👑 ':'')+'<b>'+chEsc(m.nick)+'</b> <span style="opacity:.5;font-size:12px">@'+m.login+'</span><br><span style="font-size:12px;color:'+(s.on?'#4cd964':'#9aa7b5')+'">'+(s.on?'● ':'')+s.t+'</span></div>'+(c.leader==ACC&&m.login!=ACC?'<button onclick="clAct(\'kick\',\''+m.login+'\')">✖</button>':'')+'</div>'}).join('');
+const rq=(c.reqs||[]).length?'<div style="font-weight:bold;color:#ff9800;margin:12px 0 4px">🟠 Заявки на вступление ('+c.reqs.length+')</div>'+c.reqs.map(r=>'<div style="display:flex;align-items:center;gap:8px;margin:5px 0;padding:6px 8px;border-radius:10px;background:#1b2430"><div style="flex:1"><b>'+chEsc(r.nick)+'</b> <span style="opacity:.5;font-size:12px">@'+r.login+'</span></div><button onclick="clAct(\'accept\',\''+r.login+'\')">✔</button> <button onclick="clAct(\'decline\',\''+r.login+'\')">✖</button></div>').join(''):'';
+o.innerHTML=clHead('🛡 <span style="color:#ffd24a">['+chEsc(c.tag)+']</span> '+chEsc(c.name))+'<div style="flex:1;overflow-y:auto;padding:12px">'+(c.desc?'<div class="hint" style="margin-bottom:8px">'+chEsc(c.desc)+'</div>':'')+'<button onclick="clChat()" style="'+clBtn+'">💬 Чат клана'+(c.unread?' <b style="color:#b00000">'+c.unread+'</b>':'')+'</button><div style="font-weight:bold;margin:12px 0 4px">Участники ('+c.members.length+'/'+c.max+')</div>'+mem+rq+'<div style="margin-top:16px"><button onclick="clAsk(\'leave\')" style="'+clBtn+'">🚪 Покинуть клан</button>'+(c.leader==ACC?'<button onclick="clAsk(\'disband\')" style="'+clBtn+'">💥 Распустить клан</button>':'')+'</div><div id="fcn_note" class="hint" style="color:#ffd24a;margin-top:6px">'+chEsc(CLN.note)+'</div></div>';return}
+const cr=d.creq?'<div style="padding:8px;border-radius:10px;background:#1b2430;margin:6px 0">Заявка в клан <b style="color:#ffd24a">['+chEsc(d.creq.tag)+']</b> '+chEsc(d.creq.name)+' отправлена. <button onclick="clAct(\'cancel\')" style="padding:4px 10px">Отменить</button></div>':'';
+const tabs='<div style="margin:4px 0 8px"><button onclick="CLN.view=\'search\';clRender()" style="'+clBtn+(CLN.view=='search'?'':';opacity:.55')+'">🔍 Найти</button><button onclick="CLN.view=\'create\';clRender()" style="'+clBtn+(CLN.view=='create'?'':';opacity:.55')+'">➕ Создать</button></div>';
+if(CLN.view=='create'){o.innerHTML=clHead('🛡 Кланы')+'<div style="flex:1;overflow-y:auto;padding:12px">'+tabs+cr+'<div class="hint">'+(CLAN_COST>0?'Создание клана стоит <b>'+CLAN_COST+' G</b> (у тебя '+(S.gd||0)+' G).':'Создание клана сейчас бесплатно.')+'</div><input id="fcnm" placeholder="Название (3–20 символов)" maxlength="20" style="'+clIn+'"><input id="fctg" placeholder="Тег (2–4 символа: латиница и цифры)" maxlength="4" style="'+clIn+'"><input id="fcds" placeholder="Описание (необязательно)" maxlength="100" style="'+clIn+'"><button onclick="clCreate()" style="'+clBtn+'">Создать клан</button><div id="fcn_note" class="hint" style="color:#ffd24a;margin-top:6px">'+chEsc(CLN.note)+'</div></div>';return}
+const res=CLN.res===null?'<div class="hint">Введи название или тег и нажми «Найти». Пустой запрос покажет самые большие кланы.</div>':CLN.res.length?CLN.res.map(r=>'<div style="display:flex;align-items:center;gap:8px;margin:5px 0;padding:8px;border-radius:10px;background:#1b2430"><div style="flex:1;min-width:0"><b style="color:#ffd24a">['+chEsc(r.tag)+']</b> <b>'+chEsc(r.name)+'</b> <span class="hint">· '+r.members+'/'+r.max+'</span>'+(r.desc?'<br><span style="font-size:12px;opacity:.7">'+chEsc(r.desc)+'</span>':'')+'</div>'+(d.creq&&d.creq.id==r.id?'<span class="hint">заявка отправлена</span>':'<button onclick="clJoin(\''+r.id+'\')"'+(r.members>=r.max||d.creq?' disabled':'')+'>Вступить</button>')+'</div>').join(''):'<div class="hint">Ничего не найдено.</div>';
+o.innerHTML=clHead('🛡 Кланы')+'<div style="flex:1;overflow-y:auto;padding:12px">'+tabs+cr+'<div style="display:flex;gap:6px"><input id="fcq" placeholder="Название или тег" maxlength="30" value="'+chEsc(CLN.q).replace(/"/g,'&quot;')+'" style="'+clIn+';flex:1"><button onclick="clSearch()" style="'+clBtn+'">Найти</button></div>'+res+'<div id="fcn_note" class="hint" style="color:#ffd24a;margin-top:6px">'+chEsc(CLN.note)+'</div></div>';
+const q=$('fcq');if(q)q.onkeydown=e=>{if(e.key=='Enter')clSearch()}}
+async function clSearch(){const q=($('fcq')||{}).value||'';CLN.q=q.trim();try{const r=await srvApi('/api/clan/search',{q:CLN.q});CLN.res=r.list;CLN.note='';clRender()}catch(e){clNote(e.code?e.message:'Нет связи с сервером')}}
+async function clJoin(id){try{const d=await srvApi('/api/clan/join',{id});SV.d=d;CLN.note=d.note||'';svDot();clRender()}catch(e){clNote(e.code?e.message:'Нет связи с сервером')}}
+async function clAct(a,login){try{const d=await srvApi('/api/clan/'+a,login?{login}:{});SV.d=d;CLN.note=d.note||'';CLN.cf=null;if(!d.clan)CLN.view=CLN.view=='create'?'create':'search';svDot();frRender();clRender()}catch(e){clNote(e.code?e.message:'Нет связи с сервером')}}
+function clAsk(k){const lab={leave:'покинуть клан',disband:'распустить клан'}[k];if(CLN.cf&&CLN.cf.k==k&&Date.now()-CLN.cf.t<6000){CLN.cf=null;return clAct(k)}CLN.cf={k,t:Date.now()};clNote('Точно '+lab+'? Нажми ту же кнопку ещё раз в течение 6 секунд')}
+async function clCreate(){const name=($('fcnm')||{}).value||'',tag=($('fctg')||{}).value||'',desc=($('fcds')||{}).value||'';
+if(CLAN_COST>0&&(S.gd||0)<CLAN_COST)return clNote('Не хватает G: нужно '+CLAN_COST+', у тебя '+(S.gd||0));
+try{const d=await srvApi('/api/clan/create',{name,tag,desc});if(CLAN_COST>0){S.gd=(S.gd||0)-CLAN_COST;save()}SV.d=d;CLN.note=d.note||'';CLN.view='main';svDot();frRender();clRender()}catch(e){clNote(e.code?e.message:'Нет связи с сервером')}}
+// чат клана
+function clChat(){if(!svOK()||!(SV.d&&SV.d.clan))return;CLN.view='chat';CLN.msgs=[];CLN.last=0;clChatRender();clChatPoll(true);clearInterval(CLN.t2);CLN.t2=setInterval(()=>clChatPoll(false),3000)}
+function clChatBack(){clearInterval(CLN.t2);CLN.view='main';clRender();srvSync()}
+function clChatRender(){const o=clBox(),c=SV.d&&SV.d.clan;if(!c)return;
+if(!$('fcm')){o.innerHTML=clHead('💬 <span style="color:#ffd24a">['+chEsc(c.tag)+']</span> '+chEsc(c.name),'clChatBack()')+'<div id="fcm" style="flex:1;overflow-y:auto;padding:10px"></div><div style="display:flex;gap:6px;padding:8px;background:#1b2430"><input id="fci" maxlength="300" placeholder="Сообщение клану…" autocomplete="off" style="flex:1;min-width:0;padding:10px;border-radius:8px;border:1px solid #556;background:#0f1620;color:#e8eef5;font-size:16px"><button onclick="clChatSend()" style="padding:10px 16px;font-size:18px">➤</button></div>';$('fci').onkeydown=e=>{if(e.key=='Enter')clChatSend()}}
+const b=$('fcm'),near=b.scrollHeight-b.scrollTop-b.clientHeight<80;
+b.innerHTML=CLN.msgs.length?CLN.msgs.map(m=>{const me=m.from==ACC,d=new Date(m.t),tm=('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);return'<div style="display:flex;justify-content:'+(me?'flex-end':'flex-start')+';margin:4px 0"><div style="max-width:78%;padding:8px 10px;border-radius:12px;background:'+(me?'#2a5a9a':'#232f3e')+';word-wrap:break-word;white-space:pre-wrap">'+(me?'':'<div style="font-size:11px;color:#ffd24a;margin-bottom:2px">'+chEsc(m.nick||m.from)+'</div>')+chEsc(m.text)+'<div style="font-size:10px;opacity:.6;text-align:right;margin-top:2px">'+tm+'</div></div></div>'}).join(''):'<div style="opacity:.6;text-align:center;margin-top:30px">В чате клана пока пусто. Напиши первым!</div>';
+if(near||CLN.msgs.length<=1)b.scrollTop=b.scrollHeight}
+async function clChatPoll(first){if(CLN.view!='chat'||!svOK())return;try{const r=await srvApi('/api/clan/chat/get',{since:CLN.last,read:1});if(CLN.view!='chat')return;if(r.msgs.length){CLN.msgs=CLN.msgs.concat(r.msgs);CLN.last=r.msgs[r.msgs.length-1].id}if(first||r.msgs.length)clChatRender();if(r.msgs.length)srvSync()}catch(e){}}
+async function clChatSend(){const i=$('fci'),t=(i&&i.value||'').trim();if(!t||!svOK())return;i.value='';try{await srvApi('/api/clan/chat/send',{text:t});clChatPoll(true)}catch(e){i.value=t;i.placeholder=e.code?e.message:'Нет связи с сервером'}}
+// строка «Клан» в окне аккаунта — перед блоком друзей
+{const _ap6=accPanel;accPanel=function(){_ap6.apply(this,arguments);if(!ACC)return;const f=$('frl'),h=f&&f.previousElementSibling&&f.previousElementSibling.previousElementSibling;if(h)h.insertAdjacentHTML('beforebegin','<hr style="opacity:.2"><div id="clrow"></div>');clRow()}}
+{const _fr7=frRender;frRender=function(){_fr7.apply(this,arguments);clRow()}}
+{const _o6=outAcc;outAcc=function(){clClose();_o6.apply(this,arguments)}}
+
+
+// ===== ДОБАВЛЕНО: чаты подстраиваются под экранную клавиатуру =====
+function ovFit(){const v=window.visualViewport;if(!v)return;for(const id of['chat','clanp']){const o=$(id);if(o&&o.style.display!='none'){o.style.top=v.offsetTop+'px';o.style.height=v.height+'px';o.style.bottom='auto'}}}
+if(window.visualViewport){visualViewport.addEventListener('resize',ovFit);visualViewport.addEventListener('scroll',ovFit)}
+{const _co=chOpen;chOpen=function(){_co.apply(this,arguments);ovFit()}}
+{const _clo=clOpen;clOpen=function(){_clo.apply(this,arguments);ovFit()}}
 if(window.__fast)menu();else boot();
 </script></body></html>
