@@ -11,20 +11,71 @@ const DATA_FILE = process.env.DATA_FILE || path.join(__dirname, 'data.json');
 const GAME_FILE = process.env.GAME_FILE || path.join(__dirname, 'index.html');
 const TRUST_PROXY = process.env.TRUST_PROXY === '1';      // =1 если сервер за прокси (Render, Railway, nginx)
 const ALLOW_ORIGIN = process.env.ALLOW_ORIGIN || '*';     // можно ограничить адресом сайта с игрой
+// Хранение в GitHub Gist (для хостингов, где диск стирается, например бесплатный Render).
+// Данные шифруются (AES-256-GCM) ключом из DATA_SECRET, поэтому в Gist лежит нечитаемый текст.
+const GIST_ID = process.env.GIST_ID || '', GH_TOKEN = process.env.GITHUB_TOKEN || '', DATA_SECRET = process.env.DATA_SECRET || '';
+const GH_API = (process.env.GITHUB_API || 'https://api.github.com').replace(/\/+$/, '');
+const GIST_FILE = 'thunder-data.txt';
+const REMOTE = !!(GIST_ID && GH_TOKEN);
+if (REMOTE && DATA_SECRET.length < 8) { console.error('Для хранения в Gist задай DATA_SECRET (любой пароль от 8 символов)'); process.exit(1); }
 const ONLINE_MS = 60 * 1000;                              // «в сети», если был отклик не раньше минуты назад
 const TOKEN_TTL = 60 * 86400 * 1000;
 const MAX_FRIENDS = 100, MAX_PENDING = 50, MAX_BODY = 200 * 1024, MAX_AV = 70 * 1024;
 
 // ---------- хранилище (один JSON-файл) ----------
-let db = { users: {}, tokens: {} };
-try { db = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); db.users = db.users || {}; db.tokens = db.tokens || {}; } catch (e) { /* первый запуск */ }
+let db = { users: {}, tokens: {}, chats: {} };
+try { db = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); db.users = db.users || {}; db.tokens = db.tokens || {}; db.chats = db.chats || {}; } catch (e) { /* первый запуск */ }
 let saveTimer = null;
 function writeNow() {
   const tmp = DATA_FILE + '.tmp';
-  try { fs.writeFileSync(tmp, JSON.stringify(db)); fs.renameSync(tmp, DATA_FILE); } catch (e) { console.error('Ошибка сохранения:', e.message); }
+  try { fs.writeFileSync(tmp, JSON.stringify(db)); fs.renameSync(tmp, DATA_FILE); } catch (e) { if (!REMOTE) console.error('Ошибка сохранения:', e.message); }
+  dirtyRemote = true;
 }
+
+// ---------- хранение в Gist ----------
+let dirtyRemote = false, pushing = false;
+const KEY = REMOTE ? crypto.scryptSync(DATA_SECRET, 'thunder-arena-v1', 32) : null;
+function enc(str) {
+  const iv = crypto.randomBytes(12), c = crypto.createCipheriv('aes-256-gcm', KEY, iv);
+  const ct = Buffer.concat([c.update(str, 'utf8'), c.final()]);
+  return Buffer.concat([iv, c.getAuthTag(), ct]).toString('base64');
+}
+function dec(b64) {
+  const b = Buffer.from(b64, 'base64'), d = crypto.createDecipheriv('aes-256-gcm', KEY, b.subarray(0, 12));
+  d.setAuthTag(b.subarray(12, 28));
+  return Buffer.concat([d.update(b.subarray(28)), d.final()]).toString('utf8');
+}
+async function gh(method, url, body) {
+  const r = await fetch(url, { method, headers: Object.assign({ Authorization: 'Bearer ' + GH_TOKEN, 'User-Agent': 'thunder-arena-server', Accept: 'application/vnd.github+json' }, body ? { 'Content-Type': 'application/json' } : {}), body: body ? JSON.stringify(body) : undefined });
+  if (!r.ok) throw new Error('GitHub ответил ' + r.status);
+  return r;
+}
+async function loadRemote() {
+  const g = await (await gh('GET', GH_API + '/gists/' + GIST_ID)).json();
+  const f = g.files && g.files[GIST_FILE];
+  if (!f) return null;
+  let txt = f.content;
+  if (f.truncated || txt == null) txt = await (await gh('GET', f.raw_url)).text();
+  txt = String(txt).trim();
+  if (txt.length < 40) return null; // заглушка вроде «new» при создании Gist — данных ещё нет
+  return JSON.parse(dec(txt));
+}
+async function pushRemote() {
+  if (!REMOTE || !dirtyRemote || pushing) return;
+  pushing = true; dirtyRemote = false;
+  try { await gh('PATCH', GH_API + '/gists/' + GIST_ID, { files: { [GIST_FILE]: { content: enc(JSON.stringify(db)) } } }); }
+  catch (e) { dirtyRemote = true; console.error('Gist: не удалось сохранить —', e.message); }
+  pushing = false;
+}
+setInterval(pushRemote, 15000).unref();
 function save() { if (saveTimer) return; saveTimer = setTimeout(() => { saveTimer = null; writeNow(); }, 400); }
-function flushAndExit() { if (saveTimer) clearTimeout(saveTimer); writeNow(); process.exit(0); }
+async function flushAndExit() {
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+  writeNow();
+  const t = setTimeout(() => process.exit(0), 8000);
+  try { while (pushing) await new Promise(r => setTimeout(r, 100)); await pushRemote(); } catch (e) { /* ignore */ }
+  clearTimeout(t); process.exit(0);
+}
 process.on('SIGINT', flushAndExit); process.on('SIGTERM', flushAndExit);
 
 // ---------- утилиты ----------
@@ -47,6 +98,14 @@ function limited(ip, key, max, winMs) {
 setInterval(() => { const now = Date.now(); for (const [k, h] of hits) if (h.reset < now) hits.delete(k); }, 60000).unref();
 setInterval(() => { const now = Date.now(); let ch = false; for (const k in db.tokens) if (now - db.tokens[k].t > TOKEN_TTL) { delete db.tokens[k]; ch = true; } if (ch) save(); }, 3600000).unref();
 
+const msgRate = new Map();
+const chatKey = (a, b) => [a, b].sort().join('|');
+function unreadFrom(me, f) {
+  const c = db.chats[chatKey(me, f)]; if (!c) return 0;
+  const r = (db.users[me].read || {})[f] || 0; let n = 0;
+  for (const m of c.msgs) if (m.from === f && m.id > r) n++;
+  return n;
+}
 function newToken(login) {
   const tok = crypto.randomBytes(32).toString('hex');
   db.tokens[sha(tok)] = { login, t: Date.now() };
@@ -70,7 +129,7 @@ function state(login) {
     me: pub(login),
     friends: u.friends.filter(l => db.users[l]).map(l => {
       const s = db.users[l].seen || {}, ago = s.t ? now - s.t : -1;
-      return Object.assign(pub(l), { on: !!(s.on && ago >= 0 && ago < ONLINE_MS), ago });
+      return Object.assign(pub(l), { on: !!(s.on && ago >= 0 && ago < ONLINE_MS), ago, unread: unreadFrom(login, l) });
     }),
     incoming: u.inc.filter(l => db.users[l]).map(pub),
     outgoing: u.out.filter(l => db.users[l]).map(pub)
@@ -83,7 +142,8 @@ function link(a, b) { // сделать друзьями и убрать зая�
 function unlink(a, b) {
   const A = db.users[a], B = db.users[b];
   if (!A || !B) return;
-  for (const [x, y] of [[A, b], [B, a]]) { rm(x.friends, y); rm(x.inc, y); rm(x.out, y); }
+  for (const [x, y] of [[A, b], [B, a]]) { rm(x.friends, y); rm(x.inc, y); rm(x.out, y); if (x.read) delete x.read[y]; }
+  delete db.chats[chatKey(a, b)]; // переписка удаляется вместе с дружбой
 }
 
 // ---------- обработчики API ----------
@@ -181,6 +241,49 @@ const routes = {
     if (l !== a.login && !a.user.friends.includes(l) && !a.user.inc.includes(l) && !a.user.out.includes(l)) throw new HttpErr(403, 'Нет доступа');
     return { data: u.av || '', v: u.avv || 0 };
   },
+  'POST /api/recovery/set'(req, body) {
+    const a = authOf(req, body), c = String(body.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (c.length < 12) throw new HttpErr(400, 'Некорректный код');
+    a.user.rs = crypto.randomBytes(16).toString('hex'); a.user.rc = hashPw(c, a.user.rs); save();
+    return { ok: true };
+  },
+  'POST /api/recover'(req, body, ip) { // сброс пароля по коду восстановления
+    if (limited(ip, 'auth', 20, 600000)) throw new HttpErr(429, 'Слишком много попыток, подожди несколько минут');
+    const login = String(body.login || '').trim().toLowerCase(), c = String(body.code || '').toUpperCase().replace(/[^A-Z0-9]/g, ''), np = String(body.new || '');
+    if (limited(login, 'rec', 5, 3600000)) throw new HttpErr(429, 'Слишком много попыток для этого аккаунта, попробуй через час');
+    const u = db.users[login];
+    let ok = false;
+    if (u && u.rc && u.rs && c.length >= 12) { try { ok = crypto.timingSafeEqual(Buffer.from(hashPw(c, u.rs), 'hex'), Buffer.from(u.rc, 'hex')); } catch (e) { ok = false; } }
+    if (!ok) throw new HttpErr(403, 'Неверный логин или код');
+    if (np.length < 4 || np.length > 100) throw new HttpErr(400, 'Новый пароль: минимум 4 символа');
+    u.salt = crypto.randomBytes(16).toString('hex'); u.hash = hashPw(np, u.salt);
+    delete u.rc; delete u.rs; // код одноразовый
+    for (const h in db.tokens) if (db.tokens[h].login === login) delete db.tokens[h];
+    save(); return { ok: true };
+  },
+  'POST /api/chat/send'(req, body) {
+    const a = authOf(req, body), to = String(body.to || '').trim().toLowerCase();
+    if (!db.users[to] || !a.user.friends.includes(to)) throw new HttpErr(403, 'Писать можно только друзьям');
+    const text = String(body.text || '').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').trim().slice(0, 300);
+    if (!text) throw new HttpErr(400, 'Пустое сообщение');
+    const now = Date.now(), r = (msgRate.get(a.login) || []).filter(t => now - t < 30000);
+    if (r.length >= 20) throw new HttpErr(429, 'Слишком часто, подожди немного');
+    r.push(now); msgRate.set(a.login, r);
+    const k = chatKey(a.login, to), c = db.chats[k] || (db.chats[k] = { next: 1, msgs: [] });
+    c.msgs.push({ id: c.next++, from: a.login, t: now, text });
+    if (c.msgs.length > 100) c.msgs.splice(0, c.msgs.length - 100);
+    save(); return { ok: true };
+  },
+  'POST /api/chat/get'(req, body) {
+    const a = authOf(req, body), w = String(body.with || '').trim().toLowerCase(), since = +body.since || 0;
+    if (!db.users[w] || !a.user.friends.includes(w)) throw new HttpErr(403, 'Нет доступа');
+    const c = db.chats[chatKey(a.login, w)], msgs = c ? c.msgs.filter(m => m.id > since).slice(-100) : [];
+    if (body.read && c && c.msgs.length) {
+      a.user.read = a.user.read || {}; const last = c.msgs[c.msgs.length - 1].id;
+      if ((a.user.read[w] || 0) !== last) { a.user.read[w] = last; save(); }
+    }
+    return { msgs };
+  },
   'POST /api/delete'(req, body, ip) {
     if (limited(ip, 'auth', 20, 600000)) throw new HttpErr(429, 'Слишком много попыток, подожди несколько минут');
     const a = authOf(req, body);
@@ -223,7 +326,7 @@ const server = http.createServer(async (req, res) => {
     });
     return;
   }
-  if (req.method === 'GET' && pathname === '/api/ping') return send(res, 200, { ok: true, name: 'thunder-arena', users: Object.keys(db.users).length });
+  if (req.method === 'GET' && pathname === '/api/ping') return send(res, 200, { ok: true, name: 'thunder-arena', storage: REMOTE ? 'gist' : 'file', users: Object.keys(db.users).length });
 
   const handler = routes[req.method + ' ' + pathname];
   if (!handler) return send(res, 404, { error: 'Не найдено' });
@@ -236,4 +339,16 @@ const server = http.createServer(async (req, res) => {
     else { console.error(e); send(res, 500, { error: 'Ошибка сервера' }); }
   }
 });
-server.listen(PORT, () => console.log('Thunder Arena: сервер запущен на порту ' + PORT + '  →  http://localhost:' + PORT));
+(async () => {
+  if (REMOTE) {
+    try {
+      const r = await loadRemote();
+      if (r) { db = r; db.users = db.users || {}; db.tokens = db.tokens || {}; db.chats = db.chats || {}; console.log('Данные загружены из Gist, игроков: ' + Object.keys(db.users).length); }
+      else { console.log('Gist пока пуст — начинаем с чистого листа'); dirtyRemote = true; }
+    } catch (e) {
+      console.error('Не удалось загрузить данные из Gist (' + e.message + '). Останавливаюсь, чтобы не затереть сохранения. Проверь GIST_ID, GITHUB_TOKEN и DATA_SECRET.');
+      process.exit(1);
+    }
+  }
+  server.listen(PORT, () => console.log('Thunder Arena: сервер запущен на порту ' + PORT + '  →  http://localhost:' + PORT + (REMOTE ? '  (данные в Gist)' : '')));
+})();

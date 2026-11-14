@@ -2494,7 +2494,7 @@ const r=await fetch(b+path,{method:'POST',headers:{'Content-Type':'application/j
 let j={};try{j=await r.json()}catch(e){}if(!r.ok){const er=new Error(j.error||('Ошибка '+r.status));er.code=r.status;throw er}return j}
 // оранжевый кружок на кнопке 👤, если есть входящие заявки
 {const st=document.createElement('style');st.textContent='#accb{position:relative}#accb.dot::after{content:"";position:absolute;top:-3px;right:-3px;width:12px;height:12px;border-radius:50%;background:#ff9800;border:2px solid #101820;box-shadow:0 0 6px #ff9800}';document.head.appendChild(st)}
-function svDot(){const b=$('accb');if(b)b.classList.toggle('dot',!!(svOK()&&SV.d&&SV.d.incoming&&SV.d.incoming.length))}
+function svDot(){const b=$('accb');if(b)b.classList.toggle('dot',!!(svOK()&&SV.d&&((SV.d.incoming&&SV.d.incoming.length)||(SV.d.friends&&SV.d.friends.some(f=>f.unread)))))}
 async function srvSync(on){if(!ACC||!SV.tok)return;const me=ACC;
 try{const d=await srvApi('/api/sync',{on:on===undefined?(document.hidden?0:1):on});if(ACC!==me)return;SV.d=d;SV.st='ok';SV.err='';svDot();frRender();srvAvFetch()}
 catch(e){if(ACC!==me)return;if(e.code==401){SV.tok='';SV.st='noauth';SV.d=null;SV.err='Сессия истекла — подключись снова';try{localStorage.removeItem('ta_tok:'+ACC)}catch(_){}svDot();frSrvUI();frRender()}else SV.err='Нет связи с сервером'}}
@@ -2518,7 +2518,7 @@ function frRow(u,btns,st,on){const av=(SV.av[u.login]||{}).data||'',nk=String(u.
 return'<div style="display:flex;align-items:center;gap:10px;margin:6px 0;padding:6px;border-radius:10px;background:#1b2430"><div style="width:40px;height:40px;min-width:40px;border-radius:50%;border:2px solid '+(on?'#4cd964':'#556')+';display:flex;align-items:center;justify-content:center;background:#0f1620'+(av&&/^data:image\//.test(av)?' url('+av+') center/cover':'')+'">'+(av?'':'👤')+'</div><div style="flex:1;text-align:left"><b>'+nk+'</b> <span style="opacity:.5;font-size:12px">@'+u.login+'</span><br><span style="font-size:12px;color:'+(on?'#4cd964':'#9aa7b5')+'">'+(on?'● ':'')+st+'</span></div>'+btns+'</div>'}
 function frListS(){const d=SV.d;if(!d)return'<div class="hint">Загрузка…</div>';let h='';
 if(d.incoming.length)h+='<div style="font-weight:bold;color:#ff9800;margin:6px 0">🟠 Заявки в друзья ('+d.incoming.length+')</div>'+d.incoming.map(u=>frRow(u,'<button onclick="srvAct(\'accept\',\''+u.login+'\')">✔ Принять</button> <button onclick="srvAct(\'decline\',\''+u.login+'\')">✖</button>','хочет добавить тебя в друзья',0)).join('');
-h+=d.friends.length?d.friends.map(u=>{const s=frStatO({t:u.ago<0?0:Date.now()-u.ago,on:u.on});return frRow(u,'<button onclick="srvAct(\'remove\',\''+u.login+'\')">✖</button>',s.t,s.on)}).join(''):'<div class="hint">Нет друзей :( Добавь их или пригласи!</div>';
+h+=d.friends.length?d.friends.map(u=>{const s=frStatO({t:u.ago<0?0:Date.now()-u.ago,on:u.on});return frRow(u,'<button onclick="chOpen(\''+u.login+'\')">💬'+(u.unread?' <b style="color:#ff9800">'+u.unread+'</b>':'')+'</button> <button onclick="srvAct(\'remove\',\''+u.login+'\')">✖</button>',s.t,s.on)}).join(''):'<div class="hint">Нет друзей :( Добавь их или пригласи!</div>';
 if(d.outgoing.length)h+='<div class="hint" style="margin-top:8px">Отправленные заявки:</div>'+d.outgoing.map(u=>frRow(u,'<button onclick="srvAct(\'cancel\',\''+u.login+'\')">Отмена</button>','ждёт ответа',0)).join('');
 return h}
 async function srvAct(a,l){try{const d=await srvApi('/api/friends/'+a,{login:l});SV.d=d;svDot();frRender();srvAvFetch();if(a=='request'&&$('frn'))$('frn').value='';frMsg(d.note||'Готово')}catch(e){frMsg(e.code?e.message:'Нет связи с сервером')}}
@@ -2528,7 +2528,7 @@ async function srvAct(a,l){try{const d=await srvApi('/api/friends/'+a,{login:l})
 function frSrvUI(){const e=$('svb');if(!e)return;const st='padding:8px;border-radius:8px;border:1px solid #556;background:#1b2430;color:#e8eef5;margin:4px 4px 4px 0;max-width:46vw';
 if(svOK()){e.innerHTML='<div class="hint" style="color:#4cd964">🌐 Подключено к серверу: '+srvBase().replace(/^https?:\/\//,'').replace(/[<>&"']/g,'')+'</div><button onclick="srvOff()">Отключиться</button>'+(SV.err?'<div class="hint" style="color:#ff9a30">'+SV.err+'</div>':'');return}
 const u=srvBase().replace(/[<>&"']/g,'');
-e.innerHTML='<div class="hint">🌐 Друзья по сети: подключись к серверу, и заявки будут приходить настоящим игрокам</div><input id="svu" placeholder="Адрес сервера (https://…)" value="'+u+'" style="'+st+'"><input id="svp" type="password" placeholder="Пароль аккаунта" style="'+st+'"><button onclick="srvConnect()">Подключиться</button>'+(SV.err?'<div class="hint" style="color:#ff9a30">'+SV.err+'</div>':'')}
+e.innerHTML='<div class="hint">🌐 Друзья по сети: подключись к серверу, заявки и чат будут работать с настоящими игроками</div><input id="svu" placeholder="Адрес сервера (https://…)" value="'+u+'" style="'+st+'"><input id="svp" type="password" placeholder="Пароль аккаунта" style="'+st+'"><button onclick="srvConnect()">Подключиться</button>'+(SV.err?'<div class="hint" style="color:#ff9a30">'+SV.err+'</div>':'')}
 {const _ap4=accPanel;accPanel=function(){_ap4.apply(this,arguments);if(!ACC)return;$('mp').insertAdjacentHTML('beforeend','<div id="svb" style="margin-top:8px"></div>');frSrvUI()}}
 function srvConnect(){let u=($('svu').value||'').trim(),p=$('svp').value,A=ACCS();
 if(u&&!/^https?:\/\//i.test(u))u='https://'+u;u=u.replace(/\/+$/,'');
@@ -2544,6 +2544,51 @@ function srvOff(){if(svOK())srvApi('/api/logout').catch(()=>{});try{localStorage
 setInterval(()=>{if(ACC&&SV.tok&&!document.hidden)srvSync(1)},window.SRV_POLL||12000);
 document.addEventListener('visibilitychange',()=>{if(ACC&&SV.tok){if(document.hidden)srvApi('/api/sync',{on:0}).catch(()=>{});else srvSync(1)}});
 addEventListener('pagehide',()=>{try{if(SV.tok&&srvBase())navigator.sendBeacon(srvBase()+'/api/offline',new Blob([JSON.stringify({token:SV.tok})],{type:'text/plain;charset=UTF-8'}))}catch(e){}});
+
+
+// ===== ДОБАВЛЕНО: чат с друзьями (нужен сервер) =====
+const CH={with:null,last:0,msgs:[],t:0};
+const chEsc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+function chOpen(l){if(!svOK())return;CH.with=l;CH.last=0;CH.msgs=[];let o=$('chat');
+if(!o){o=document.createElement('div');o.id='chat';o.style.cssText='position:fixed;left:0;top:0;right:0;bottom:0;z-index:99999;background:#0f1620;color:#e8eef5;display:flex;flex-direction:column;font:16px sans-serif';document.body.appendChild(o)}
+o.style.display='flex';const f=((SV.d&&SV.d.friends)||[]).find(x=>x.login==l)||{login:l,nick:l};
+o.innerHTML='<div style="display:flex;align-items:center;gap:10px;padding:10px;background:#1b2430"><button onclick="chClose()" style="padding:8px 14px;font-size:18px">←</button><b style="flex:1">'+chEsc(f.nick||l)+' <span style="opacity:.5;font-size:12px">@'+l+'</span></b></div><div id="chm" style="flex:1;overflow-y:auto;padding:10px"></div><div style="display:flex;gap:6px;padding:8px;background:#1b2430"><input id="chi" maxlength="300" placeholder="Сообщение…" autocomplete="off" style="flex:1;min-width:0;padding:10px;border-radius:8px;border:1px solid #556;background:#0f1620;color:#e8eef5;font-size:16px"><button onclick="chSend()" style="padding:10px 16px;font-size:18px">➤</button></div>';
+$('chi').onkeydown=e=>{if(e.key=='Enter')chSend()};chRender(1);chPoll(true);clearInterval(CH.t);CH.t=setInterval(()=>chPoll(false),3000)}
+function chRender(sc){const b=$('chm');if(!b)return;const near=b.scrollHeight-b.scrollTop-b.clientHeight<80;
+b.innerHTML=CH.msgs.length?CH.msgs.map(m=>{const me=m.from==ACC,d=new Date(m.t),tm=('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);
+return'<div style="display:flex;justify-content:'+(me?'flex-end':'flex-start')+';margin:4px 0"><div style="max-width:78%;padding:8px 10px;border-radius:12px;background:'+(me?'#2a5a9a':'#232f3e')+';word-wrap:break-word;white-space:pre-wrap">'+chEsc(m.text)+'<div style="font-size:10px;opacity:.6;text-align:right;margin-top:2px">'+tm+'</div></div></div>'}).join(''):'<div style="opacity:.6;text-align:center;margin-top:30px">Сообщений пока нет. Напиши первым!</div>';
+if(sc||near)b.scrollTop=b.scrollHeight}
+async function chPoll(first){const w=CH.with;if(!w||!svOK())return;
+try{const r=await srvApi('/api/chat/get',{with:w,since:CH.last,read:1});if(CH.with!==w)return;if(r.msgs.length){CH.msgs=CH.msgs.concat(r.msgs);CH.last=r.msgs[r.msgs.length-1].id}if(first||r.msgs.length)chRender(1);if(r.msgs.length)srvSync()}catch(e){}}
+async function chSend(){const i=$('chi'),t=(i&&i.value||'').trim();if(!t||!CH.with||!svOK())return;i.value='';
+try{await srvApi('/api/chat/send',{to:CH.with,text:t});chPoll(true)}catch(e){i.value=t;i.placeholder=e.code?e.message:'Нет связи с сервером'}}
+function chClose(){clearInterval(CH.t);CH.with=null;const o=$('chat');if(o)o.style.display='none';if(SV.tok)srvSync()}
+{const _o5=outAcc;outAcc=function(){chClose();_o5.apply(this,arguments)}}
+
+// ===== ДОБАВЛЕНО: «Забыли пароль?» и код восстановления =====
+function rcNorm(s){return String(s||'').toUpperCase().replace(/[^A-Z0-9]/g,'')}
+function rcMake(){const al='ABCDEFGHJKLMNPQRSTUVWXYZ23456789',a=new Uint32Array(12);crypto.getRandomValues(a);let s='';for(const v of a)s+=al[v%32];return s.slice(0,4)+'-'+s.slice(4,8)+'-'+s.slice(8,12)}
+function rcMsg(t){const e=$('rcm');if(e)e.textContent=t}
+async function rcGen(){const A=ACCS(),p=$('rcp').value;if(!A[ACC]||A[ACC].h!==hpw(ACC,p))return rcMsg('Неверный пароль');
+const code=rcMake(),n=rcNorm(code);A[ACC].rc=hpw(ACC+'#rc',n);accSaveA(A);let note='';
+if(svOK()){try{await srvApi('/api/recovery/set',{code:n});note=' Код действует и на этом устройстве, и на сервере.'}catch(e){note=' На сервере сохранить не удалось ('+(e.code?e.message:'нет связи')+'), код действует только на этом устройстве.'}}
+else note=srvBase()?' Подключись к серверу и создай код ещё раз, чтобы он работал и там.':' Код действует на этом устройстве.';
+$('rcv').innerHTML='<div style="font-size:22px;letter-spacing:2px;font-weight:bold;color:#ffd24a;margin:6px 0">'+code+'</div><div class="hint">Запиши код! Он показывается один раз, прежний код перестаёт работать.'+note+'</div>';$('rcp').value='';rcMsg('')}
+{const _ap5=accPanel;accPanel=function(){_ap5.apply(this,arguments);if(!ACC)return;const A=ACCS(),st='padding:8px;border-radius:8px;border:1px solid #556;background:#1b2430;color:#e8eef5;margin:4px 4px 4px 0;max-width:46vw';
+$('mp').insertAdjacentHTML('beforeend','<hr style="opacity:.2"><div class="hint">🔑 Код восстановления пароля ('+((A[ACC]||{}).rc?'создан':'не создан')+'). Нужен, если забудешь пароль:</div><input id="rcp" type="password" placeholder="Пароль аккаунта" style="'+st+'"><button onclick="rcGen()">Создать новый код</button><div id="rcv"></div><div id="rcm" class="hint" style="color:#ffd24a"></div>')}}
+// на экране входа: ссылка «Забыли пароль?» и форма сброса
+function rcForm(){const au=$('au');if(!au||$('rcf'))return;const l=($('aul')||{}).value||'';
+au.insertAdjacentHTML('beforeend','<div id="rcf" style="margin-top:10px"><div class="hint">Сброс пароля по коду восстановления:</div><input id="rfl" placeholder="Логин" value="'+l.replace(/[^a-zA-Z0-9_]/g,'')+'" autocomplete="off"><input id="rfc" placeholder="Код (XXXX-XXXX-XXXX)" autocomplete="off"><input id="rfp" type="password" placeholder="Новый пароль"><button onclick="rcReset()">Сбросить пароль</button><div id="rfm" class="hint" style="color:#ffd24a"></div></div>')}
+async function rcReset(){const l=($('rfl').value||'').trim().toLowerCase(),c=rcNorm($('rfc').value),n=$('rfp').value,m=t=>{$('rfm').textContent=t};
+if(!l||c.length<12)return m('Введи логин и код восстановления (12 символов)');if(n.length<4)return m('Новый пароль: минимум 4 символа');
+let loc=0,srv=0,err='';const A=ACCS();
+if(A[l]&&A[l].rc&&A[l].rc===hpw(l+'#rc',c)){A[l].h=hpw(l,n);delete A[l].rc;accSaveA(A);loc=1}
+if(srvBase()){try{await srvApi('/api/recover',{login:l,code:c,new:n},'');srv=1}catch(e){err=e.code?e.message:'нет связи с сервером'}}
+if(srv&&!loc){const B=ACCS();if(B[l]){B[l].h=hpw(l,n);delete B[l].rc;accSaveA(B);loc=1}} // сервер подтвердил владельца — меняем и локальный пароль
+if(!loc&&!srv)return m(err&&err!='Неверный логин или код'?err:'Неверный логин или код восстановления');
+try{localStorage.removeItem('ta_tok:'+l)}catch(e){}
+m('✅ Пароль изменён'+(loc&&srv?' (на устройстве и на сервере)':loc?' на этом устройстве'+(srvBase()&&err?' (на сервере не вышло: '+err+')':''):' на сервере. На этом устройстве такого аккаунта нет — зарегистрируйся с этим же логином и новым паролем')+'. Теперь войди с новым паролем. Код больше не действует, создай новый в окне 👤.')}
+{const _sa6=showAuth;showAuth=function(reg){_sa6.apply(this,arguments);if(reg)return;const au=$('au');if(au&&!$('rcl'))au.insertAdjacentHTML('beforeend','<div class="hint" id="rcl"><a onclick="rcForm()">Забыли пароль?</a></div>')}}
 
 if(window.__fast)menu();else boot();
 </script></body></html>
