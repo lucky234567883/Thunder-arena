@@ -1,0 +1,9 @@
+{
+  "name": "thunder-arena-server",
+  "version": "1.0.0",
+  "description": "Сервер друзей и заявок для Thunder Arena 3D",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=16" },
+  "license": "MIT"
+}
