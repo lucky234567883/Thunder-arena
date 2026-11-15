@@ -2592,7 +2592,7 @@ m('✅ Пароль изменён'+(loc&&srv?' (на устройстве и н
 
 
 // ===== ДОБАВЛЕНО: кланы (нужен сервер) =====
-const CLAN_COST=0; // цена создания клана в G. Сейчас бесплатно. Когда включим платное создание — поставить 200
+const CLAN_COST=200; // цена создания клана в G (чтобы сделать бесплатным — поставь 0)
 const CLN={view:'main',q:'',res:null,msgs:[],last:0,t:0,t2:0,note:'',cf:null};
 const clBtn='padding:8px 12px;margin:3px 3px 3px 0';
 const clIn='padding:10px;border-radius:8px;border:1px solid #556;background:#0f1620;color:#e8eef5;font-size:16px;width:100%;box-sizing:border-box;margin:4px 0';
@@ -2642,9 +2642,65 @@ async function clChatSend(){const i=$('fci'),t=(i&&i.value||'').trim();if(!t||!s
 
 
 // ===== ДОБАВЛЕНО: чаты подстраиваются под экранную клавиатуру =====
-function ovFit(){const v=window.visualViewport;if(!v)return;for(const id of['chat','clanp']){const o=$(id);if(o&&o.style.display!='none'){o.style.top=v.offsetTop+'px';o.style.height=v.height+'px';o.style.bottom='auto'}}}
+function ovFit(){const v=window.visualViewport;if(!v)return;for(const id of['chat','clanp','lobp']){const o=$(id);if(o&&o.style.display!='none'){o.style.top=v.offsetTop+'px';o.style.height=v.height+'px';o.style.bottom='auto'}}}
 if(window.visualViewport){visualViewport.addEventListener('resize',ovFit);visualViewport.addEventListener('scroll',ovFit)}
 {const _co=chOpen;chOpen=function(){_co.apply(this,arguments);ovFit()}}
 {const _clo=clOpen;clOpen=function(){_clo.apply(this,arguments);ovFit()}}
+
+// ===== ДОБАВЛЕНО: лобби для совместной игры с друзьями (нужен сервер) =====
+// Игроки собираются в лобби (до 4), лидер выбирает режим и карту, бой стартует у всех одновременно.
+const LB={sig:'',seen:{},invited:{},note:'',cm:'waves',cp:'steppe'};
+const LB_HIDE=['blacksea','pacific'];
+const lbSel='padding:10px;border-radius:8px;border:1px solid #556;background:#0f1620;color:#e8eef5;font-size:16px;width:100%;box-sizing:border-box;margin:4px 0';
+function lbVeh(){try{const v=L(NA,SC)[S.sel[NA+SC]||0];return (v&&v[0])||''}catch(e){return''}}
+function lbBox(){let o=$('lobp');if(!o){o=document.createElement('div');o.id='lobp';o.style.cssText='position:fixed;left:0;top:0;right:0;bottom:0;z-index:99997;background:#0f1620;color:#e8eef5;display:none;flex-direction:column;font:16px sans-serif';document.body.appendChild(o)}return o}
+function lbHead(t){return'<div style="display:flex;align-items:center;gap:10px;padding:10px;background:#1b2430"><button onclick="lbClose()" style="padding:8px 14px;font-size:18px">←</button><b style="flex:1">'+t+'</b></div>'}
+function lbOpts(map,cur,hide){return Object.keys(map).filter(k=>!(hide||[]).includes(k)).map(k=>'<option value="'+k+'"'+(k==cur?' selected':'')+'>'+chEsc(map[k])+'</option>').join('')}
+function lbOpen(){const o=lbBox();o.style.display='flex';LB.sig='';LB.note='';
+if(!svOK()){o.innerHTML=lbHead('🎮 Лобби')+'<div style="padding:16px;opacity:.85">Лобби работают через сервер. Открой игру по ссылке на сайт или подключись к серверу: 👤 → «Сервер».</div>';return}
+lbRender();srvSync(1)}
+function lbClose(){const o=$('lobp');if(o)o.style.display='none'}
+function lbNote(t){LB.note=t;const e=$('lbn');if(e)e.textContent=t}
+function lbRender(){const o=lbBox(),d=SV.d||{},lob=d.lobby,inv=d.linv||[],row='display:flex;align-items:center;gap:8px;margin:5px 0;padding:8px;border-radius:10px;background:#1b2430';let h='';
+if(!lob){
+h+=inv.length?'<div style="font-weight:bold;color:#ff9800;margin:4px 0">🟠 Приглашения</div>'+inv.map(i=>'<div style="'+row+'"><div style="flex:1;min-width:0"><b>'+chEsc(i.from.nick)+'</b> зовёт в лобби <b style="color:#ffd24a">'+i.code+'</b><br><span style="font-size:12px;opacity:.7">'+chEsc(MODES[i.mode]||i.mode)+' · '+chEsc(MAPS[i.map]||i.map)+' · '+i.n+'/'+i.max+'</span></div><button onclick="lbJoin(\''+i.code+'\')">Принять</button> <button onclick="lbCall(\'decline\',{code:\''+i.code+'\'})">✖</button></div>').join(''):'';
+h+='<div style="background:#1b2430;border-radius:12px;padding:12px;margin:10px 0"><div style="font-weight:bold;margin-bottom:6px">Создать лобби</div>Режим<select id="lbcm" onchange="LB.cm=this.value" style="'+lbSel+'">'+lbOpts(MODES,LB.cm,['random'])+'</select>Карта<select id="lbcp" onchange="LB.cp=this.value" style="'+lbSel+'">'+lbOpts(MAPS,LB.cp,LB_HIDE)+'</select><button onclick="lbCreate()" style="margin-top:6px">Создать лобби</button></div>'
++'<div style="background:#1b2430;border-radius:12px;padding:12px"><div style="font-weight:bold;margin-bottom:6px">Войти по коду</div><div style="display:flex;gap:6px"><input id="lbcode" maxlength="5" placeholder="Код (5 символов)" autocomplete="off" style="'+lbSel+';flex:1;text-transform:uppercase"><button onclick="lbJoin()">Войти</button></div></div>';
+}else{
+const me=lob.members.find(m=>m.login==ACC)||{},lead=lob.leader==ACC,others=lob.members.filter(m=>!m.leader),allReady=others.length>0&&others.every(m=>m.ready),full=lob.members.length>=lob.max;
+h+='<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:4px 0"><div style="font-size:28px;letter-spacing:4px;font-weight:bold;color:#ffd24a">'+lob.code+'</div><button onclick="lbShare()">📨 Поделиться кодом</button></div>';
+h+=lead?'<div style="background:#1b2430;border-radius:12px;padding:10px;margin:8px 0"><div class="hint">Настройки боя (меняет лидер):</div><select id="lbsm" onchange="lbSet()" style="'+lbSel+'">'+lbOpts(MODES,lob.mode,['random'])+'</select><select id="lbsp" onchange="lbSet()" style="'+lbSel+'">'+lbOpts(MAPS,lob.map,LB_HIDE)+'</select></div>':'<div style="background:#1b2430;border-radius:12px;padding:10px;margin:8px 0">Режим: <b>'+chEsc(MODES[lob.mode]||lob.mode)+'</b><br>Карта: <b>'+chEsc(MAPS[lob.map]||lob.map)+'</b></div>';
+h+='<div style="font-weight:bold;margin:10px 0 4px">Игроки ('+lob.members.length+'/'+lob.max+')</div>'+lob.members.map(m=>'<div style="'+row+'"><div style="flex:1;min-width:0">'+(m.leader?'👑 ':'')+(m.tag?'<b style="color:#ffd24a">['+chEsc(m.tag)+']</b> ':'')+'<b>'+chEsc(m.nick)+'</b><br><span style="font-size:12px;color:'+(m.on?'#4cd964':'#9aa7b5')+'">'+(m.on?'● в сети':'не в сети')+(m.veh?' · '+chEsc(m.veh):'')+'</span></div><div style="font-size:20px">'+(m.leader?'':m.ready?'✅':'⏳')+'</div>'+(lead&&!m.leader?'<button onclick="lbCall(\'kick\',{login:\''+m.login+'\'})">✖</button>':'')+'</div>').join('');
+h+='<div style="margin:12px 0">'+(lead?'<button onclick="lbStart()"'+(allReady?'':' disabled')+' style="padding:12px 18px;font-size:17px">▶ Начать бой</button> <span class="hint">'+(others.length?(others.filter(m=>m.ready).length+' из '+others.length+' готовы'):'Пригласи хотя бы одного друга')+'</span>':'<button onclick="lbReady()" style="padding:12px 18px;font-size:17px">'+(me.ready?'↩ Я не готов':'✅ Я готов')+'</button>')+' <button onclick="lbCall(\'leave\')" style="padding:12px 14px">🚪 Выйти</button></div>';
+const cand=new Map();for(const f of d.friends||[])cand.set(f.login,{login:f.login,nick:f.nick,on:f.on});if(d.clan)for(const m of d.clan.members)if(m.login!=ACC&&!cand.has(m.login))cand.set(m.login,{login:m.login,nick:m.nick,on:m.on});
+const inL=new Set(lob.members.map(m=>m.login)),list=[...cand.values()].filter(c=>!inL.has(c.login)).sort((x,y)=>(y.on-x.on)||String(x.nick).localeCompare(String(y.nick)));
+h+='<div style="font-weight:bold;margin:14px 0 4px">Пригласить (друзья и одноклановцы)</div>'+(list.length?list.map(c=>{const iv=LB.invited[c.login]&&Date.now()-LB.invited[c.login]<300000;return'<div style="'+row+'"><div style="flex:1;min-width:0"><b>'+chEsc(c.nick)+'</b> <span style="opacity:.5;font-size:12px">@'+c.login+'</span><br><span style="font-size:12px;color:'+(c.on?'#4cd964':'#9aa7b5')+'">'+(c.on?'● в сети':'не в сети')+'</span></div><button onclick="lbInvite(\''+c.login+'\')"'+(iv||full?' disabled':'')+'>'+(iv?'Приглашён':'Пригласить')+'</button></div>'}).join(''):'<div class="hint">Некого приглашать. Добавь друзей в окне 👤 или вступи в клан.</div>');
+h+='<div class="hint" style="margin-top:12px">Бой начнётся у всех сразу с одинаковым режимом и картой. Каждый играет на технике, выбранной у него в ангаре.</div>';
+}
+o.innerHTML=lbHead('🎮 Лобби'+(lob?' · <span style="color:#ffd24a">'+lob.code+'</span>':''))+'<div style="flex:1;overflow-y:auto;padding:12px">'+h+'<div id="lbn" class="hint" style="color:#ffd24a;margin-top:8px">'+chEsc(LB.note)+'</div></div>'}
+async function lbCall(path,body){try{const d=await srvApi('/api/lobby/'+path,body||{});SV.d=d;svDot();LB.sig='';LB.note=d.note||'';lbAfterSync();return d}catch(e){lbNote(e.code?e.message:'Нет связи с сервером')}}
+function lbCreate(){lbCall('create',{mode:$('lbcm').value,map:$('lbcp').value,veh:lbVeh()})}
+function lbJoin(code){const c=String(code||($('lbcode')||{}).value||'').trim().toUpperCase();if(!c)return lbNote('Введи код лобби');lbCall('join',{code:c,veh:lbVeh()})}
+function lbSet(){lbCall('settings',{mode:$('lbsm').value,map:$('lbsp').value})}
+function lbReady(){const lob=SV.d&&SV.d.lobby;if(!lob)return;const me=lob.members.find(m=>m.login==ACC)||{};lbCall('ready',{ready:!me.ready,veh:lbVeh()})}
+async function lbInvite(l){LB.invited[l]=Date.now();const r=await lbCall('invite',{login:l});if(!r)delete LB.invited[l]}
+function lbStart(){lbCall('start')}
+function lbShare(){const lob=SV.d&&SV.d.lobby;if(!lob)return;const t='Играй со мной в Thunder Arena 3D! Код лобби: '+lob.code+' (🎮 → «Войти по коду»)';
+if(navigator.share){navigator.share({title:'Thunder Arena 3D',text:t}).catch(()=>{});return}
+try{navigator.clipboard.writeText(t).then(()=>lbNote('Код скопирован — отправь его другу'),()=>lbNote(t))}catch(e){lbNote(t)}}
+// запуск боя у всех участников
+function lbLaunch(lob){if(G)return;const o=$('lobp');if(o)o.style.display='none';try{clClose()}catch(e){}try{chClose()}catch(e){}
+const mp=$('mp');if(mp)mp.style.display='none';const mn=$('menu');if(mn)mn.style.display='none';
+MODE=lob.mode;MAP=lob.map;try{$('mlab').textContent='Режим: '+MODES[MODE]+' · '+MAPS[MAP]}catch(e){}startGo()}
+function lbAfterSync(){const d=SV.d;if(!d)return;const lob=d.lobby;
+if(lob){if(LB.seen[lob.code]===undefined)LB.seen[lob.code]=lob.startId;else if(lob.startId>LB.seen[lob.code]){LB.seen[lob.code]=lob.startId;lbLaunch(lob)}}
+const b=$('lbb');if(b)b.classList.toggle('dot',!!(d.linv&&d.linv.length));
+const o=$('lobp');if(o&&o.style.display!='none'){const sig=JSON.stringify([lob,d.linv,(d.friends||[]).map(f=>f.login+f.on),d.clan&&d.clan.members.map(m=>m.login+m.on)]);if(sig!==LB.sig){LB.sig=sig;lbRender()}}}
+{const _ss=srvSync;srvSync=async function(){await _ss.apply(this,arguments);lbAfterSync()}}
+setInterval(()=>{if(ACC&&SV.tok&&!document.hidden&&((SV.d&&SV.d.lobby)||($('lobp')&&$('lobp').style.display!='none')))srvSync(1)},2000);
+{const st=document.createElement('style');st.textContent='#lbb{position:relative}#lbb.dot::after{content:"";position:absolute;top:-3px;right:-3px;width:12px;height:12px;border-radius:50%;background:#ff9800;border:2px solid #101820;box-shadow:0 0 6px #ff9800}#gc{flex-wrap:wrap}';document.head.appendChild(st)}
+{const g=$('gc');if(g&&!$('lbb')){const b=document.createElement('button');b.id='lbb';b.textContent='🎮';b.title='Лобби';b.onclick=()=>lbOpen();g.insertBefore(b,$('accb')||g.lastChild)}}
+{const _lo=lbOpen;lbOpen=function(){_lo.apply(this,arguments);ovFit()}}
+{const _o7=outAcc;outAcc=function(){lbClose();LB.seen={};LB.sig='';LB.invited={};const b=$('lbb');if(b)b.classList.remove('dot');_o7.apply(this,arguments)}}
 if(window.__fast)menu();else boot();
 </script></body></html>

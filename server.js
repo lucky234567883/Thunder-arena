@@ -140,6 +140,35 @@ function removeFromClan(login) { // выход/исключение/удален
 }
 function needClan(a) { const c = clanOf(a.login); if (!c) throw new HttpErr(403, 'Ты не в клане'); return c; }
 function needLeader(a) { const c = needClan(a); if (c.leader !== a.login) throw new HttpErr(403, 'Это может только лидер клана'); return c; }
+// ---------- лобби для совместной игры (хранятся в памяти) ----------
+const LOBBY_MAX = 4, LOBBY_MODES = ['waves', 'cap', 'hold', 'escort'];
+const LOBBY_MAPS = ['steppe', 'desert', 'afghan', 'taiga', 'city', 'jungle', 'alps', 'canyon', 'swamp', 'odesa', 'normandy'];
+const lobbies = new Map(), lobbyOfUser = new Map(), lobbyInv = new Map();
+const lobbyOf = l => { const id = lobbyOfUser.get(l); return (id && lobbies.get(id)) || null; };
+const cleanVeh = s => String(s || '').replace(/[<>&"'`\u0000-\u001f]/g, '').trim().slice(0, 30);
+function makeLobbyCode() { const al = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; let c; do { c = ''; for (let i = 0; i < 5; i++) c += al[crypto.randomInt(al.length)]; } while (lobbies.has(c)); return c; }
+function lobbyState(login) {
+  const L = lobbyOf(login); if (!L) return null; const now = Date.now();
+  return { code: L.id, leader: L.leader, mode: L.mode, map: L.map, startId: L.startId, max: LOBBY_MAX,
+    members: L.members.map(m => { const u = db.users[m.login] || {}, s = u.seen || {}, ago = s.t ? now - s.t : -1;
+      return { login: m.login, nick: u.nick || m.login, tag: (clanOf(m.login) || {}).tag || '', ready: !!m.ready, veh: m.veh || '', on: !!(s.on && ago >= 0 && ago < ONLINE_MS), leader: m.login === L.leader }; }) };
+}
+function lobbyInvites(login) {
+  const now = Date.now(), list = (lobbyInv.get(login) || []).filter(i => now - i.t < 300000 && lobbies.has(i.code) && lobbies.get(i.code).members.some(m => m.login === i.from));
+  lobbyInv.set(login, list);
+  if (lobbyOf(login)) return [];
+  return list.map(i => { const L = lobbies.get(i.code); return { code: i.code, from: { login: i.from, nick: (db.users[i.from] || {}).nick || i.from }, mode: L.mode, map: L.map, n: L.members.length, max: LOBBY_MAX }; }).filter(i => i.n < LOBBY_MAX);
+}
+function leaveLobby(login) {
+  const L = lobbyOf(login); lobbyOfUser.delete(login); if (!L) return;
+  L.members = L.members.filter(m => m.login !== login);
+  if (!L.members.length) { lobbies.delete(L.id); return; }
+  if (L.leader === login) L.leader = L.members[0].login;
+}
+setInterval(() => { // убрать из лобби тех, кто пропал больше чем на 3 минуты
+  const now = Date.now();
+  for (const L of [...lobbies.values()]) for (const m of [...L.members]) { const u = db.users[m.login], t = u && u.seen && u.seen.t; if (!u || !t || now - t > 180000) leaveLobby(m.login); }
+}, 60000).unref();
 function newToken(login) {
   const tok = crypto.randomBytes(32).toString('hex');
   db.tokens[sha(tok)] = { login, t: Date.now() };
@@ -168,7 +197,9 @@ function state(login) {
     incoming: u.inc.filter(l => db.users[l]).map(pub),
     outgoing: u.out.filter(l => db.users[l]).map(pub),
     clan: clanState(login),
-    creq: u.creq && db.clans[u.creq] ? { id: u.creq, name: db.clans[u.creq].name, tag: db.clans[u.creq].tag } : null
+    creq: u.creq && db.clans[u.creq] ? { id: u.creq, name: db.clans[u.creq].name, tag: db.clans[u.creq].tag } : null,
+    lobby: lobbyState(login),
+    linv: lobbyInvites(login)
   };
 }
 function link(a, b) { // сделать друзьями и убрать заявки
@@ -405,12 +436,80 @@ const routes = {
     if (body.read && c.chat.msgs.length) { const last = c.chat.msgs[c.chat.msgs.length - 1].id; if ((a.user.cread || 0) !== last) { a.user.cread = last; save(); } }
     return { msgs };
   },
+  'POST /api/lobby/create'(req, body) {
+    const a = authOf(req, body), mode = String(body.mode || ''), map = String(body.map || '');
+    if (lobbyOf(a.login)) throw new HttpErr(409, 'Ты уже в лобби');
+    if (!LOBBY_MODES.includes(mode) || !LOBBY_MAPS.includes(map)) throw new HttpErr(400, 'Выбери режим и карту');
+    if (limited(a.login, 'lobby', 20, 3600000)) throw new HttpErr(429, 'Слишком много лобби, подожди немного');
+    const id = makeLobbyCode();
+    lobbies.set(id, { id, leader: a.login, members: [{ login: a.login, ready: false, veh: cleanVeh(body.veh) }], mode, map, startId: 0, created: Date.now() });
+    lobbyOfUser.set(a.login, id);
+    return Object.assign(state(a.login), { note: 'Лобби создано, код ' + id });
+  },
+  'POST /api/lobby/invite'(req, body) {
+    const a = authOf(req, body), L = lobbyOf(a.login), t = String(body.login || '').trim().toLowerCase();
+    if (!L) throw new HttpErr(403, 'Сначала создай лобби');
+    if (!db.users[t] || t === a.login) throw new HttpErr(404, 'Игрок не найден');
+    const mc = clanOf(a.login), tc = clanOf(t);
+    if (!a.user.friends.includes(t) && !(mc && tc && mc.id === tc.id)) throw new HttpErr(403, 'Приглашать можно друзей и одноклановцев');
+    if (lobbyOf(t)) throw new HttpErr(409, 'Игрок уже в лобби');
+    if (L.members.length >= LOBBY_MAX) throw new HttpErr(400, 'В лобби нет мест');
+    if (limited(a.login, 'linv', 30, 3600000)) throw new HttpErr(429, 'Слишком много приглашений');
+    const list = (lobbyInv.get(t) || []).filter(i => i.code !== L.id); list.push({ code: L.id, from: a.login, t: Date.now() });
+    lobbyInv.set(t, list.slice(-5));
+    return Object.assign(state(a.login), { note: 'Приглашение отправлено: ' + db.users[t].nick });
+  },
+  'POST /api/lobby/join'(req, body) {
+    const a = authOf(req, body), code = String(body.code || '').trim().toUpperCase();
+    if (limited(a.login, 'ljoin', 20, 600000)) throw new HttpErr(429, 'Слишком много попыток, подожди несколько минут');
+    if (lobbyOf(a.login)) throw new HttpErr(409, 'Ты уже в лобби');
+    const L = lobbies.get(code); if (!L) throw new HttpErr(404, 'Лобби не найдено (или уже закрыто)');
+    if (L.members.length >= LOBBY_MAX) throw new HttpErr(400, 'В лобби нет мест');
+    L.members.push({ login: a.login, ready: false, veh: cleanVeh(body.veh) }); lobbyOfUser.set(a.login, code);
+    lobbyInv.set(a.login, (lobbyInv.get(a.login) || []).filter(i => i.code !== code));
+    return Object.assign(state(a.login), { note: 'Ты в лобби ' + code });
+  },
+  'POST /api/lobby/decline'(req, body) {
+    const a = authOf(req, body), code = String(body.code || '').trim().toUpperCase();
+    lobbyInv.set(a.login, (lobbyInv.get(a.login) || []).filter(i => i.code !== code));
+    return Object.assign(state(a.login), { note: 'Приглашение отклонено' });
+  },
+  'POST /api/lobby/ready'(req, body) {
+    const a = authOf(req, body), L = lobbyOf(a.login); if (!L) throw new HttpErr(403, 'Ты не в лобби');
+    const m = L.members.find(x => x.login === a.login); m.ready = !!body.ready; if (body.veh !== undefined) m.veh = cleanVeh(body.veh);
+    return state(a.login);
+  },
+  'POST /api/lobby/settings'(req, body) {
+    const a = authOf(req, body), L = lobbyOf(a.login); if (!L) throw new HttpErr(403, 'Ты не в лобби');
+    if (L.leader !== a.login) throw new HttpErr(403, 'Настройки меняет только лидер лобби');
+    const mode = String(body.mode || ''), map = String(body.map || '');
+    if (!LOBBY_MODES.includes(mode) || !LOBBY_MAPS.includes(map)) throw new HttpErr(400, 'Некорректный режим или карта');
+    if (mode !== L.mode || map !== L.map) for (const m of L.members) if (m.login !== L.leader) m.ready = false; // настройки изменились — нужна новая готовность
+    L.mode = mode; L.map = map;
+    return state(a.login);
+  },
+  'POST /api/lobby/start'(req, body) {
+    const a = authOf(req, body), L = lobbyOf(a.login); if (!L) throw new HttpErr(403, 'Ты не в лобби');
+    if (L.leader !== a.login) throw new HttpErr(403, 'Начать бой может только лидер лобби');
+    if (L.members.length < 2) throw new HttpErr(400, 'Для совместной игры нужен хотя бы один друг в лобби');
+    if (L.members.some(m => m.login !== L.leader && !m.ready)) throw new HttpErr(400, 'Не все игроки готовы');
+    L.startId++; for (const m of L.members) if (m.login !== L.leader) m.ready = false;
+    return Object.assign(state(a.login), { note: 'Бой начинается!' });
+  },
+  'POST /api/lobby/leave'(req, body) { const a = authOf(req, body); leaveLobby(a.login); return Object.assign(state(a.login), { note: 'Ты вышел из лобби' }); },
+  'POST /api/lobby/kick'(req, body) {
+    const a = authOf(req, body), L = lobbyOf(a.login), t = String(body.login || '').trim().toLowerCase();
+    if (!L) throw new HttpErr(403, 'Ты не в лобби');
+    if (L.leader !== a.login) throw new HttpErr(403, 'Исключать может только лидер');
+    if (t === a.login || !L.members.some(m => m.login === t)) throw new HttpErr(400, 'Нельзя исключить этого игрока');
+    leaveLobby(t); return Object.assign(state(a.login), { note: 'Игрок исключён из лобби' });
+  },
   'POST /api/delete'(req, body, ip) {
     if (limited(ip, 'auth', 20, 600000)) throw new HttpErr(429, 'Слишком много попыток, подожди несколько минут');
     const a = authOf(req, body);
     if (!checkPw(String(body.pass || ''), a.user)) throw new HttpErr(401, 'Пароль неверный');
     for (const l of [...a.user.friends, ...a.user.inc, ...a.user.out]) unlink(a.login, l);
-    removeFromClan(a.login);
+    removeFromClan(a.login); leaveLobby(a.login); lobbyInv.delete(a.login);
     for (const h in db.tokens) if (db.tokens[h].login === a.login) delete db.tokens[h];
     delete db.users[a.login]; save(); return { ok: true };
   }
