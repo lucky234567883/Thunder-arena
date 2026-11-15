@@ -2702,5 +2702,53 @@ setInterval(()=>{if(ACC&&SV.tok&&!document.hidden&&((SV.d&&SV.d.lobby)||($('lobp
 {const g=$('gc');if(g&&!$('lbb')){const b=document.createElement('button');b.id='lbb';b.textContent='🎮';b.title='Лобби';b.onclick=()=>lbOpen();g.insertBefore(b,$('accb')||g.lastChild)}}
 {const _lo=lbOpen;lbOpen=function(){_lo.apply(this,arguments);ovFit()}}
 {const _o7=outAcc;outAcc=function(){lbClose();LB.seen={};LB.sig='';LB.invited={};const b=$('lbb');if(b)b.classList.remove('dot');_o7.apply(this,arguments)}}
+
+// ===== ДОБАВЛЕНО: физика столкновений =====
+// Горы, здания, ангары и башни разбивают самолёты и вертолёты. Столкнувшиеся в воздухе
+// самолёты/вертолёты (игрок, враги, союзники) уничтожаются оба и падают.
+let COLS=[],COLERR=0;
+function colName(c){return c.k=='cone'?'гору':(c.k=='hz'||c.k=='hx')?'ангар':c.k=='cyl'?'башню':(c.k=='box'&&MAP=='canyon')?'скалу':(Math.abs(c.cx-AF.x)<120&&Math.abs(c.cz-AF.z)<160)?'постройку аэродрома':'здание'}
+// читаем крупные неподвижные объекты прямо из сцены карты
+function colScan(sc){const out=[];sc.updateMatrixWorld(true);
+for(const o of sc.children){if(!o.isMesh||!o.geometry)continue;const ty=o.geometry.type;if(ty!='BoxGeometry'&&ty!='ConeGeometry'&&ty!='CylinderGeometry')continue;
+const bb=new THREE.Box3().setFromObject(o),ex=bb.max.x-bb.min.x,ey=bb.max.y-bb.min.y,ez=bb.max.z-bb.min.z,top=bb.max.y,cx=(bb.min.x+bb.max.x)/2,cz=(bb.min.z+bb.max.z)/2,cy=(bb.min.y+bb.max.y)/2;
+if(!(ex>0&&ey>0&&ez>0)||!isFinite(ex+ey+ez+cx+cz+cy))continue;
+let c=null;
+if(ty=='ConeGeometry'){if(ey>=30&&Math.min(ex,ez)>=60)c={k:'cone',x:cx,z:cz,y0:bb.min.y,h:ey,r:Math.min(ex,ez)/2}}   // горы
+else if(ty=='BoxGeometry'){if(top>=5&&ey>=4&&Math.min(ex,ez)>=3.5&&ex*ez>=25)c={k:'box'}}                          // здания, скалы
+else{const big=Math.max(ex,ez);
+if(ey>=15&&ey>=1.2*big&&big>=3.5)c={k:'cyl',x:cx,z:cz,y0:bb.min.y,y1:top,r:big/2}                                  // башни, маяки
+else if(top>=8&&big>=20&&ey>=8){if(ez>=ex)c={k:'hz',x:cx,y:cy,z0:bb.min.z,z1:bb.max.z,r:Math.min(ex,ey)/2};else c={k:'hx',z:cz,y:cy,x0:bb.min.x,x1:bb.max.x,r:Math.min(ez,ey)/2}}} // ангары-арки
+if(!c)continue;c.bb=bb;c.cx=cx;c.cz=cz;
+if(bb.min.x<AF.x+AF.hw+2&&bb.max.x>AF.x-AF.hw-2&&bb.min.z<AF.z+AF.hl&&bb.max.z>AF.z-AF.hl)c.off=1;                    // то, что стоит прямо на ВПП, не трогаем (иначе не взлететь)
+out.push(c)}
+return out}
+function colHit(c,x,y,z,r){switch(c.k){
+case'box':return x>c.bb.min.x-r&&x<c.bb.max.x+r&&y>c.bb.min.y-r&&y<c.bb.max.y+r&&z>c.bb.min.z-r&&z<c.bb.max.z+r;
+case'cone':{const dy=y-c.y0;if(dy<-r||dy>c.h+r)return false;return Math.hypot(x-c.x,z-c.z)<c.r*Math.max(0,1-Math.max(0,dy)/c.h)+r}
+case'cyl':return y>c.y0-r&&y<c.y1+r&&Math.hypot(x-c.x,z-c.z)<c.r+r;
+case'hz':return z>c.z0-r&&z<c.z1+r&&Math.hypot(x-c.x,y-c.y)<c.r+r;
+case'hx':return x>c.x0-r&&x<c.x1+r&&Math.hypot(z-c.z,y-c.y)<c.r+r}
+return false}
+// врезался ли объект в постройку (проверяем путь с прошлого кадра, чтобы не «пролететь сквозь» при лагах)
+function colOne(o,r){const has=o.__cx!==undefined,n=has?Math.max(1,Math.min(12,Math.ceil(Math.hypot(o.x-o.__cx,o.y-o.__cy,o.z-o.__cz)/3))):1;let hit=null;
+for(let i=1;i<=n&&!hit;i++){const f=has?i/n:1,x=has?o.__cx+(o.x-o.__cx)*f:o.x,y=has?o.__cy+(o.y-o.__cy)*f:o.y,z=has?o.__cz+(o.z-o.__cz)*f:o.z;let any=null;
+for(const c of COLS){if(!c.off&&colHit(c,x,y,z,r)){any=c;break}}
+if(!any)o.__arm=1;else if(o.__arm)hit=any}   // объект «вооружается» только когда впервые оказался вне построек (появление внутри здания не убивает)
+o.__cx=o.x;o.__cy=o.y;o.__cz=o.z;return hit}
+function colKill(q){if(q.k==0){if(G.dying!=null)return;G.lb=null;G.lh=null;startDeath(true);G.why='Столкновение в воздухе!'}else if(q.k==1)hitA(q.o,1e9);else hitAl(q.o,1e9)}
+function colDead(q){return q.k==0?G.dying!=null:!!q.o.dead}
+function colUpd(){const p=G.p;if(G.__cols!==G.sc){G.__cols=G.sc;COLS=colScan(G.sc)}
+const air=T=='air'||T=='heli',rp=T=='air'?2.8:2.6,list=[];
+if(air){if(T=='heli'||!G.gnd){const c=colOne(p,rp);if(c){const why='Разбился о '+colName(c)+'!';msg('💥 '+why,'#ff5040');startDeath(false);G.why=why;return}list.push({o:p,r:rp,k:0})}else{p.__cx=undefined}}
+for(const e of G.E){if(e.dead||(e.t!='air'&&e.t!='heli'))continue;const r=e.t=='air'?2.8:2.6,c=colOne(e,r);
+if(c){hitA(e,1e9);msg('Вражеский '+(e.t=='heli'?'вертолёт':'самолёт')+' разбился о '+colName(c),'#ffd040');continue}if(e.y>3)list.push({o:e,r,k:1})}
+for(const a of G.A){if(a.dead||(a.t!='air'&&a.t!='heli'))continue;const r=a.t=='air'?2.8:2.6,c=colOne(a,r);
+if(c){hitAl(a,1e9);msg('Союзник разбился о '+colName(c),'#ff9a30');continue}if(a.y>3)list.push({o:a,r,k:2})}
+for(const q of list)if(q.o.__t0===undefined)q.o.__t0=G.tt;
+for(let i=0;i<list.length;i++){const a=list[i];if(colDead(a))continue;for(let j=i+1;j<list.length;j++){const b=list[j];if(colDead(b))continue;
+if(G.tt-a.o.__t0<4||G.tt-b.o.__t0<4)continue;   // сразу после появления не сталкиваем
+if(Math.hypot(a.o.x-b.o.x,a.o.y-b.o.y,a.o.z-b.o.z)<a.r+b.r){colKill(a);colKill(b);msg('💥 Столкновение в воздухе!','#ff5040');break}}}}
+{const _stc=step;step=function(dt){_stc.apply(this,arguments);if(G&&!G.paused&&G.dying==null&&!G.over&&G.tt>.3&&!G.rsp){try{colUpd()}catch(e){if(++COLERR>5)COLS=[]}}}}
 if(window.__fast)menu();else boot();
 </script></body></html>
