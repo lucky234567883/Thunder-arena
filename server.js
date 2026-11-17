@@ -18,6 +18,10 @@ const GH_API = (process.env.GITHUB_API || 'https://api.github.com').replace(/\/+
 const GIST_FILE = 'thunder-data.txt';
 const REMOTE = !!(GIST_ID && GH_TOKEN);
 if (REMOTE && DATA_SECRET.length < 8) { console.error('Для хранения в Gist задай DATA_SECRET (любой пароль от 8 символов)'); process.exit(1); }
+// Админ-страница /admin: сброс пароля игрока, если он забыл и пароль, и код восстановления.
+// Включается переменной окружения ADMIN_KEY (от 8 символов). Без неё страница и API выключены.
+const ADMIN_KEY = process.env.ADMIN_KEY || '', ADMIN_ON = ADMIN_KEY.length >= 8;
+const ADMIN_HTML = "<!doctype html><html lang=\"ru\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><meta name=\"robots\" content=\"noindex\"><title>Thunder Arena — админ</title>\n<style>body{font:16px sans-serif;background:#0f1620;color:#e8eef5;margin:0;padding:14px}h2{margin:4px 0 12px}input{padding:10px;border-radius:8px;border:1px solid #556;background:#1b2430;color:#e8eef5;font-size:16px;width:100%;box-sizing:border-box;margin:4px 0}button{background:#f0a020;color:#111;border:0;border-radius:8px;padding:9px 14px;font-weight:700;font-size:15px}.row{display:flex;align-items:center;gap:8px;margin:6px 0;padding:8px;border-radius:10px;background:#1b2430}.row div{flex:1;min-width:0}.s{font-size:12px;opacity:.7}.on{color:#4cd964}#msg{color:#ffd24a;margin:10px 0}#res{display:none;background:#14301a;border:1px solid #4cd964;border-radius:12px;padding:12px;margin:10px 0}#pw{font:bold 26px monospace;letter-spacing:2px;color:#ffd24a;word-break:break-all;margin:6px 0}</style></head>\n<body><h2>🔧 Админ-панель</h2>\n<div id=\"lg\"><div class=\"s\">Ключ — это значение переменной ADMIN_KEY на сервере.</div><input id=\"k\" type=\"password\" placeholder=\"Ключ администратора\" autocomplete=\"off\"><button id=\"go\">Войти</button></div>\n<div id=\"app\" hidden><input id=\"q\" placeholder=\"Поиск по логину или нику\"><div id=\"res\"><div>Новый пароль для <b id=\"rl\"></b>:</div><div id=\"pw\"></div><button id=\"cp\">Скопировать</button><div class=\"s\" style=\"margin-top:6px\">Передай его игроку. Он вводит его на экране входа: «Забыли пароль?» → поле «Код или временный пароль» → и придумывает свой новый пароль.</div></div><div id=\"list\"></div></div>\n<div id=\"msg\"></div>\n<script>\nvar $=function(i){return document.getElementById(i)},KEY='',USERS=[],SURE='',ST=0;\nfunction msg(t){$('msg').textContent=t||''}\nfunction api(p,b){return fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({key:KEY},b||{}))}).then(function(r){return r.json().catch(function(){return{}}).then(function(j){if(!r.ok)throw new Error(j.error||('Ошибка '+r.status));return j})})}\nfunction ago(t,on){if(on)return'в сети';if(!t)return'не заходил(а)';var m=Math.floor((Date.now()-t)/60000);if(m<10)return'был(а) недавно';if(m<60)return'был(а) '+m+' мин назад';var h=Math.floor(m/60);if(h<24)return'был(а) '+h+' ч назад';var d=Math.floor(h/24);return'был(а) '+d+' дн назад'}\nfunction load(){KEY=KEY||$('k').value;api('/api/admin/users').then(function(j){USERS=j.users;$('lg').hidden=true;$('app').hidden=false;msg('Игроков: '+USERS.length);render()}).catch(function(e){KEY='';msg(e.message)})}\nfunction render(){var q=$('q').value.trim().toLowerCase(),l=$('list');l.textContent='';USERS.filter(function(u){return!q||u.login.indexOf(q)>=0||u.nick.toLowerCase().indexOf(q)>=0}).forEach(function(u){\nvar r=document.createElement('div');r.className='row';var d=document.createElement('div'),b=document.createElement('b');b.textContent=(u.tag?'['+u.tag+'] ':'')+u.nick;var lg=document.createElement('span');lg.className='s';lg.textContent=' @'+u.login;\nvar s=document.createElement('div');s.className='s'+(u.on?' on':'');s.textContent=ago(u.seen,u.on)+(u.code?' · код восстановления есть':' · кода нет');d.appendChild(b);d.appendChild(lg);d.appendChild(s);\nvar bt=document.createElement('button');bt.textContent='Сбросить пароль';bt.onclick=function(){reset(u,bt)};r.appendChild(d);r.appendChild(bt);l.appendChild(r)})}\nfunction reset(u,bt){if(SURE!==u.login||Date.now()-ST>5000){SURE=u.login;ST=Date.now();bt.textContent='Точно? Нажми ещё раз';return}\nSURE='';api('/api/admin/reset',{login:u.login}).then(function(j){$('rl').textContent=j.login;$('pw').textContent=j.password;$('res').style.display='block';msg('Пароль сброшен. Старые входы игрока завершены.');load();window.scrollTo(0,0)}).catch(function(e){msg(e.message)})}\n$('go').onclick=function(){KEY='';load()};$('k').onkeydown=function(e){if(e.key==='Enter'){KEY='';load()}};$('q').oninput=render;\n$('cp').onclick=function(){var t=$('pw').textContent;try{navigator.clipboard.writeText(t).then(function(){msg('Скопировано')},function(){msg(t)})}catch(e){msg(t)}};\n</script></body></html>\n";
 const ONLINE_MS = 60 * 1000;                              // «в сети», если был отклик не раньше минуты назад
 const TOKEN_TTL = 60 * 86400 * 1000;
 const CLAN_MAX = 30, MAX_CLANS = 1000;
@@ -169,6 +173,13 @@ setInterval(() => { // убрать из лобби тех, кто пропал 
   const now = Date.now();
   for (const L of [...lobbies.values()]) for (const m of [...L.members]) { const u = db.users[m.login], t = u && u.seen && u.seen.t; if (!u || !t || now - t > 180000) leaveLobby(m.login); }
 }, 60000).unref();
+function adminGuard(body, ip) {
+  if (!ADMIN_ON) throw new HttpErr(404, 'Админ-панель выключена: задай переменную ADMIN_KEY (от 8 символов) на сервере');
+  if (limited(ip, 'adm', 10, 600000)) throw new HttpErr(429, 'Слишком много попыток, подожди несколько минут');
+  const h = x => crypto.createHash('sha256').update(String(x || '')).digest();
+  if (!crypto.timingSafeEqual(h(body.key), h(ADMIN_KEY))) throw new HttpErr(403, 'Неверный ключ');
+}
+function randPass() { const al = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789'; let p = ''; for (let i = 0; i < 8; i++) p += al[crypto.randomInt(al.length)]; return p; }
 function newToken(login) {
   const tok = crypto.randomBytes(32).toString('hex');
   db.tokens[sha(tok)] = { login, t: Date.now() };
@@ -504,6 +515,19 @@ const routes = {
     if (t === a.login || !L.members.some(m => m.login === t)) throw new HttpErr(400, 'Нельзя исключить этого игрока');
     leaveLobby(t); return Object.assign(state(a.login), { note: 'Игрок исключён из лобби' });
   },
+  'POST /api/admin/users'(req, body, ip) {
+    adminGuard(body, ip); const now = Date.now();
+    return { users: Object.keys(db.users).sort().map(l => { const u = db.users[l], s = u.seen || {}; return { login: l, nick: u.nick, created: u.created || 0, seen: s.t || 0, on: !!(s.on && s.t && now - s.t < ONLINE_MS), tag: (clanOf(l) || {}).tag || '', code: !!u.rc }; }) };
+  },
+  'POST /api/admin/reset'(req, body, ip) {
+    adminGuard(body, ip);
+    const l = String(body.login || '').trim().toLowerCase(), u = db.users[l];
+    if (!u) throw new HttpErr(404, 'Игрок не найден');
+    let np = String(body.new || ''); if (!np) np = randPass(); else if (np.length < 4 || np.length > 100) throw new HttpErr(400, 'Пароль: минимум 4 символа');
+    u.salt = crypto.randomBytes(16).toString('hex'); u.hash = hashPw(np, u.salt); delete u.rc; delete u.rs;
+    for (const h in db.tokens) if (db.tokens[h].login === l) delete db.tokens[h];
+    save(); return { login: l, password: np };
+  },
   'POST /api/delete'(req, body, ip) {
     if (limited(ip, 'auth', 20, 600000)) throw new HttpErr(429, 'Слишком много попыток, подожди несколько минут');
     const a = authOf(req, body);
@@ -546,6 +570,10 @@ const server = http.createServer(async (req, res) => {
       fs.createReadStream(GAME_FILE).pipe(res);
     });
     return;
+  }
+  if (req.method === 'GET' && pathname === '/admin') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'no-referrer' });
+    return res.end(ADMIN_HTML);
   }
   if (req.method === 'GET' && pathname === '/api/ping') return send(res, 200, { ok: true, name: 'thunder-arena', storage: REMOTE ? 'gist' : 'file', users: Object.keys(db.users).length });
 
